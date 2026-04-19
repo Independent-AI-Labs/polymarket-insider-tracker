@@ -17,6 +17,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from polymarket_insider_tracker.storage.models import (
+    DetectorMetricsModel,
     FundingTransferModel,
     WalletProfileModel,
     WalletRelationshipModel,
@@ -510,3 +511,96 @@ class RelationshipRepository:
         )
         # SQLAlchemy Result does have rowcount but typing doesn't reflect it
         return (result.rowcount or 0) > 0  # type: ignore[attr-defined]
+
+
+@dataclass
+class DetectorMetricsDTO:
+    """Data transfer object for a detector-metrics row."""
+
+    window_start: datetime
+    window_end: datetime
+    signal: str
+    alerts_total: int
+    hits: int
+    misses: int
+    pending: int
+    precision: Decimal | None = None
+    pnl_uplift_bps: int | None = None
+    notes: str | None = None
+    computed_at: datetime | None = None
+    id: int | None = None
+
+    @classmethod
+    def from_model(cls, model: DetectorMetricsModel) -> DetectorMetricsDTO:
+        return cls(
+            id=model.id,
+            computed_at=model.computed_at,
+            window_start=model.window_start,
+            window_end=model.window_end,
+            signal=model.signal,
+            alerts_total=model.alerts_total,
+            hits=model.hits,
+            misses=model.misses,
+            pending=model.pending,
+            precision=model.precision,
+            pnl_uplift_bps=model.pnl_uplift_bps,
+            notes=model.notes,
+        )
+
+
+class DetectorMetricsRepository:
+    """Repository for backtest-computed detector metrics (Phase C).
+
+    Readers: the monthly calibration newsletter (`scripts/newsletters/monthly.py`)
+    and the weekly hit-or-miss retrospective read rows for their reporting
+    window. Writers: `polymarket_insider_tracker.backtest.metrics`.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def insert(self, dto: DetectorMetricsDTO) -> DetectorMetricsDTO:
+        """Insert a metrics row and return it with db-assigned fields populated."""
+        model = DetectorMetricsModel(
+            computed_at=dto.computed_at or datetime.now(UTC),
+            window_start=dto.window_start,
+            window_end=dto.window_end,
+            signal=dto.signal,
+            alerts_total=dto.alerts_total,
+            hits=dto.hits,
+            misses=dto.misses,
+            pending=dto.pending,
+            precision=dto.precision,
+            pnl_uplift_bps=dto.pnl_uplift_bps,
+            notes=dto.notes,
+        )
+        self.session.add(model)
+        await self.session.flush()
+        return DetectorMetricsDTO.from_model(model)
+
+    async def list_for_window(
+        self, window_start: datetime, window_end: datetime
+    ) -> list[DetectorMetricsDTO]:
+        """Return all metrics rows whose `window_start` falls in [start, end)."""
+        result = await self.session.execute(
+            select(DetectorMetricsModel)
+            .where(DetectorMetricsModel.window_start >= window_start)
+            .where(DetectorMetricsModel.window_start < window_end)
+            .order_by(DetectorMetricsModel.window_start, DetectorMetricsModel.signal)
+        )
+        return [DetectorMetricsDTO.from_model(m) for m in result.scalars().all()]
+
+    async def latest_per_signal(self, signals: list[str]) -> dict[str, DetectorMetricsDTO]:
+        """Return the most recent row for each signal name, keyed by signal."""
+        out: dict[str, DetectorMetricsDTO] = {}
+        for signal in signals:
+            result = await self.session.execute(
+                select(DetectorMetricsModel)
+                .where(DetectorMetricsModel.signal == signal)
+                .order_by(DetectorMetricsModel.window_start.desc())
+                .limit(1)
+            )
+            model = result.scalar_one_or_none()
+            if model is not None:
+                out[signal] = DetectorMetricsDTO.from_model(model)
+        return out
