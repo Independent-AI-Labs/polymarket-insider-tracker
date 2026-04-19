@@ -649,6 +649,18 @@ frame against the Polygon on-chain log stream (CTFExchange fills)
 and attach the recovered proxy wallet before the pipeline hands
 the trade to the detector stack.
 
+**Environmental prerequisite (operator-level, not a code task):**
+this deployment needs either (a) a paid Polygon RPC provider
+(Alchemy / Infura / QuickNode) with `eth_getLogs` enabled — the
+free `polygon-rpc.com` returns "API key disabled" at the tenant
+level — or (b) the `data-api.polymarket.com` hostname unpinned
+from its current 127.0.0.1 resolver hijack so the no-auth public
+`/trades` endpoint becomes reachable. Option (b) is the lower-lift
+path and should be considered before building the full on-chain
+correlator. `curl -v https://polygon-rpc.com` + `getent hosts
+data-api.polymarket.com` will confirm which constraint applies in
+any given environment.
+
 ### 14.1 On-chain correlation glue
 
 - [ ] **14.1.1** In `chain_indexer`, expose a
