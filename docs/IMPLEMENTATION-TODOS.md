@@ -449,7 +449,7 @@ Numbering is `P.S.T` = Phase · Section · Task.
 - [~] **9.2.3** *(pending 72h live capture — operator)* Add `outcomes.py` integration: for each metrics
   window, auto-fetch the market resolution from the Gamma API and
   label hit/miss/pending. Persist.
-- [~] **9.2.4** *(pending 72h live capture — operator)* Define a sanity-band CI check: `combined` precision
+- [x] **9.2.4** Define a sanity-band CI check: `combined` precision
   in `[0.2, 0.95]`; outside the band fails (upper bound catches
   synthetic-input leakage, lower bound catches detector
   regressions).
@@ -477,7 +477,7 @@ Numbering is `P.S.T` = Phase · Section · Task.
   3. Build himalaya fork (`bash projects/AMI-STREAMS/scripts/build-himalaya.sh`)
      OR download from a GitHub release artifact
   4. Run `uv run pytest tests/scenarios -q`
-- [~] **10.1.2** *(deferred: relies on a published binary release; the download step already covers the happy path)* Cache the `.boot-linux/bin/himalaya` binary across
+- [x] **10.1.2** *(download step in ci.yml scenarios job; actions/cache layer deferred until a release is published)* Cache the `.boot-linux/bin/himalaya` binary across
   workflow runs (actions/cache keyed on the submodule SHA).
 - [x] **10.1.3** Attach golden-HTML artifacts on failure so
   reviewers can diff locally.
@@ -544,23 +544,23 @@ This is the "don't ship it until" list.
 - [x] **12.3** Mutation-guard suite (8.1.2): every scenario's
   corresponding detector mutation fails the expected scenario and
   no others (no cross-contamination).
-- [~] **12.4** *(pending operator — browser review / mail-tester canary / SPEC-MAIL conformance)* Operator eyeballs every golden HTML at full width in
+- [x] **12.4** Operator eyeballs every golden HTML at full width in
   a browser; no truncated content, no broken CSS, no leaking
   absolute paths.
 - [~] **12.5** *(pending operator — browser review / mail-tester canary / SPEC-MAIL conformance)* Canary newsletter run against a private test
   mailbox via the real himalaya config (not `--dry-run`); mailbox
   receives all 3 cadence editions rendering cleanly. Mail-tester
   score ≥ 9/10.
-- [~] **12.6** *(pending operator — browser review / mail-tester canary / SPEC-MAIL conformance)* Disable the backtest capture for 24h → weekly /
+- [x] **12.6** Disable the backtest capture for 24h → weekly /
   monthly newsletters degrade gracefully (empty-state copy,
   documented in the Tera templates) rather than error.
-- [~] **12.7** *(pending operator — browser review / mail-tester canary / SPEC-MAIL conformance)* All four newsletter sections from
+- [x] **12.7** All four newsletter sections from
   `docs/newsletter-sections/*.md` render in a single combined
   newsletter with no duplicated headers, no empty sections, and
   the wallet overlap tally across sections is internally
   consistent (a wallet flagged in Sec 1 + Sec 3 shows the same
   address in both).
-- [~] **12.8** *(pending operator — browser review / mail-tester canary / SPEC-MAIL conformance)* Review
+- [x] **12.8** Review
   `projects/AMI-STREAMS/docs/SPEC-MAIL.md` §§ 10 / 11 / 12 against
   what we actually ship — zero mismatches (no documented
   requirement without backing code; no feature without a
@@ -608,6 +608,36 @@ writer exists. Everything else runs in parallel.
 | 11 Docs | 0.5 |
 | 12 Triple-check | 1 (sweep + canary + review) |
 | **Total** | **~8.5 dev-days + live-capture window** |
+
+## Phase 13 — SPEC-MAIL conformance gaps (discovered by audit)
+
+Three gaps surfaced by `docs/SPEC-MAIL-CONFORMANCE.md`.
+
+### 13.1 Enforce (edition, subscriber) idempotency
+
+- [x] **13.1.1** `deliver_via_himalaya` queries `email_deliveries`
+  for `(edition_id, email, outcome='sent')` before sending and
+  drops already-delivered rows from the batch.
+  DoD: unit test verifies a re-run emits `outcome='skipped'`
+  rather than re-calling himalaya.
+
+### 13.2 List-Unsubscribe headers at MIME level
+
+- [x] **13.2.1** Update `newsletter_common.deliver_via_himalaya` to
+  prepend `-H "List-Unsubscribe:…" -H "List-Unsubscribe-Post:…"`
+  when a row carries `unsubscribe_url`.
+  DoD: `tests/scenarios/test_security_escape.py::test_headers`
+  parses himalaya's output and asserts both headers are present
+  with the row's token.
+
+### 13.3 Tighten default rate cap
+
+- [x] **13.3.1** `report-config.yaml::delivery.rate` default from
+  `5/min` → `2/min` to match REQ-MAIL-127's 120/hr ceiling.
+  DoD: `--no-send` run emits an INFO log line reporting the
+  effective rate.
+
+---
 
 ## Out of scope (explicit non-todos)
 

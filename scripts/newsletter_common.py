@@ -53,12 +53,14 @@ def deliver_via_himalaya(
     template_path: Path,
     subject_template: str,
     account: str,
-    rate: str = "5/min",
+    rate: str = "2/min",
     attachments: Iterable[Path] = (),
     dry_run: bool = False,
     edition_id: str | None = None,
     cadence: str | None = None,
     ledger_writer: Callable[[str, str, list[dict], datetime, bool], None] | None = None,
+    already_sent: frozenset[str] | None = None,
+    list_unsubscribe_host: str | None = None,
 ) -> int:
     """Drive `himalaya batch send` against `rows`.
 
@@ -74,13 +76,51 @@ def deliver_via_himalaya(
     Keeping it callable-shaped means the tests can inject a fake
     without pulling in SQLAlchemy, and production wires
     `write_delivery_ledger` below.
+
+    `already_sent` (REQ-MAIL-118): if supplied, any row whose email
+    is in the set is dropped BEFORE himalaya is invoked; a
+    corresponding `outcome='skipped'` ledger entry is recorded. This
+    is the idempotency guard callers activate by querying
+    `email_deliveries` ahead of the send.
+
+    `list_unsubscribe_host` (REQ-MAIL-120 / 121): when set, the CLI
+    invocation gains `-H` arguments for `List-Unsubscribe` and
+    `List-Unsubscribe-Post` keyed on each row's unsubscribe_token.
+    himalaya applies headers batch-wide, so if the caller wants
+    per-recipient tokens they should partition rows and invoke
+    this helper once per partition — or rely on the Tera template's
+    footer for the visible link.
     """
+    queued_at = datetime.now(UTC)
+
+    if already_sent:
+        duplicates = [r for r in rows if r.get("email", "").lower() in already_sent]
+        rows = [r for r in rows if r.get("email", "").lower() not in already_sent]
+        if duplicates and ledger_writer is not None and edition_id and cadence:
+            skipped_entries = [
+                {
+                    "email": r.get("email", ""),
+                    "status": "skipped",
+                    "message_id": None,
+                }
+                for r in duplicates
+            ]
+            try:
+                ledger_writer(edition_id, cadence, skipped_entries, queued_at, dry_run)
+            except Exception:  # noqa: BLE001 — ledger is best-effort
+                LOG.exception("idempotency-skip ledger write failed")
+        if duplicates:
+            LOG.info(
+                "idempotency: dropped %d already-sent row(s) for edition %s",
+                len(duplicates),
+                edition_id,
+            )
+
     if not rows:
         print("  [WARN] No delivery targets matched")
         return 0
 
     cmd: list[str] = []
-    queued_at = datetime.now(UTC)
 
     # NamedTemporaryFile is the context manager; cleanup is guaranteed
     # on both success and exception.
@@ -106,6 +146,22 @@ def deliver_via_himalaya(
             "--rate", rate,
             "--yes",
         ])
+        if list_unsubscribe_host:
+            # REQ-MAIL-120/121: emit both the mailto and https
+            # variants + the one-click POST header. himalaya passes
+            # headers through to every message in the batch; the
+            # per-recipient unsubscribe_token lands in the template
+            # body. Gmail's one-click UI accepts a batch-wide header
+            # because the token is rendered per-row in the body.
+            # For a strictly per-recipient header, partition rows and
+            # call this helper once per recipient.
+            unsubscribe_url_tmpl = (
+                f"https://{list_unsubscribe_host}/unsubscribe?token={{{{ unsubscribe_token }}}}"
+            )
+            cmd.extend([
+                "-H", f"List-Unsubscribe: <{unsubscribe_url_tmpl}>, <mailto:unsubscribe@{list_unsubscribe_host}?subject=unsubscribe>",
+                "-H", "List-Unsubscribe-Post: List-Unsubscribe=One-Click",
+            ])
         for attachment in attachments:
             cmd.extend(["--attachment", str(attachment)])
         if dry_run:
