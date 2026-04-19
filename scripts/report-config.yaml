@@ -126,9 +126,13 @@ delivery:
   # Name of the himalaya account this script sends through.
   account: "polymarket"
 
-  # Default `--rate` passed to `himalaya batch send`. Format: N/sec, N/min,
-  # N/hour, or the literal "unlimited".
-  rate: "5/min"
+  # Default `--rate` passed to `himalaya batch send`. Format: N/sec,
+  # N/min, N/hour, or the literal "unlimited". REQ-MAIL-127 caps the
+  # per-(sending-domain, recipient-domain) rate at 120/hour; 2/min =
+  # 120/hour, which matches. Operators with an established sending
+  # reputation can raise the cap, but they own the deliverability
+  # consequences.
+  rate: "2/min"
 
   targets:
     - name: "vlad"

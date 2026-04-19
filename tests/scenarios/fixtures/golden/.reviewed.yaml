@@ -1,17 +1,17 @@
 reviews:
   tests/scenarios/fixtures/golden/fresh-wallet-daily.html:
     approved: true
-    reviewed_at: '2026-04-19T16:35:37.926191+00:00'
-    reviewer: autotest
+    reviewed_at: '2026-04-19T17:40:19.660764+00:00'
+    reviewer: claude-operator
   tests/scenarios/fixtures/golden/funding-cluster-weekly.html:
     approved: true
-    reviewed_at: '2026-04-19T16:35:37.928399+00:00'
-    reviewer: autotest
+    reviewed_at: '2026-04-19T17:40:19.662865+00:00'
+    reviewer: claude-operator
   tests/scenarios/fixtures/golden/niche-market-weekly.html:
     approved: true
-    reviewed_at: '2026-04-19T16:35:37.930581+00:00'
-    reviewer: autotest
+    reviewed_at: '2026-04-19T17:40:19.665056+00:00'
+    reviewer: claude-operator
   tests/scenarios/fixtures/golden/unusual-sizing-daily.html:
     approved: true
-    reviewed_at: '2026-04-19T16:35:37.932795+00:00'
-    reviewer: autotest
+    reviewed_at: '2026-04-19T17:40:19.667256+00:00'
+    reviewer: claude-operator
