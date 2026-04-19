@@ -120,49 +120,49 @@ Numbering is `P.S.T` = Phase · Section · Task.
 
 ### 2.1 Fixture design
 
-- [ ] **2.1.1** `tests/scenarios/fixtures/inputs/fresh-wallet.jsonl`
+- [x] **2.1.1** `tests/scenarios/fixtures/inputs/fresh-wallet.jsonl`
   — 3 TradeEvents:
   - `hot` wallet (`0x7a3…f91`): nonce 2, age 2h, BUY YES @ 0.05,
     size 600000 → notional $30k, market slug
     `will-maduro-leave-office-by-end-of-jan-2026`.
   - `decoy-old`: 2-year-old wallet, nonce 500+, same market, $500.
   - `decoy-small`: fresh wallet but notional $200 (below threshold).
-- [ ] **2.1.2** `tests/scenarios/fixtures/snapshots/fresh-wallet.yaml`
+- [x] **2.1.2** `tests/scenarios/fixtures/snapshots/fresh-wallet.yaml`
   — per-address `WalletSnapshot` + per-market-id `MarketSnapshot`
   (`daily_volume=15000`, category `other` → niche_market also fires).
-- [ ] **2.1.3** Record the snapshot generation logic in an inline
+- [x] **2.1.3** Record the snapshot generation logic in an inline
   comment so the inputs are reproducible (name → address mapping is
   deterministic, not randomised).
 
 ### 2.2 Assertions
 
-- [ ] **2.2.1** Exactly 1 `fresh_wallet` assessment emitted;
+- [x] **2.2.1** Exactly 1 `fresh_wallet` assessment emitted;
   `decoy-small` dropped (below `min_trade_size`); `decoy-old`
   dropped (not fresh).
-- [ ] **2.2.2** `weighted_score ≥ 0.5` (base) and `≤ 1.0` (cap).
-- [ ] **2.2.3** Since the market is niche too, assert
+- [x] **2.2.2** `weighted_score ≥ 0.5` (base) and `≤ 1.0` (cap).
+- [x] **2.2.3** Since the market is niche too, assert
   `signals_triggered == ("fresh_wallet", "niche_market")` and score
   reflects the ×1.2 multi-signal boost (≈ 0.78).
-- [ ] **2.2.4** `alert_daily_rollup` row present:
+- [x] **2.2.4** `alert_daily_rollup` row present:
   `signal='fresh_wallet', unique_wallets=1, total_notional=30000`.
-- [ ] **2.2.5** Newsletter body contains:
+- [x] **2.2.5** Newsletter body contains:
   masked address, "age 2h", "nonce 2", "$30,000", market slug.
 
 ### 2.3 Golden file
 
-- [ ] **2.3.1** Capture first rendered HTML as
+- [x] **2.3.1** Capture first rendered HTML as
   `tests/scenarios/fixtures/golden/fresh-wallet-daily.html`.
-- [ ] **2.3.2** Manual eyeball pass — operator reviews the golden
+- [~] **2.3.2** *(pending operator review)* Manual eyeball pass — operator reviews the golden
   and signs off that the output is what the newsletter *should*
   look like (checked in as `.golden-reviewed-by` comment at top of
   the file).
 
 ### 2.4 Negative controls
 
-- [ ] **2.4.1** Vary each threshold one at a time and confirm the
+- [x] **2.4.1** Vary each threshold one at a time and confirm the
   assertion fails: nonce=10 → no alert; notional=$999 → no alert;
   age=72h → no alert.
-- [ ] **2.4.2** Property-based test (hypothesis): for
+- [x] **2.4.2** Property-based test (hypothesis): for
   `nonce ∈ [1..4] × notional ∈ [1000, 100000]` the detector fires;
   outside the region it doesn't.
 
