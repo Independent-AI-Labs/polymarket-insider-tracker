@@ -177,6 +177,67 @@ def _parse_himalaya_summary(raw: str) -> list[dict] | None:
     return results
 
 
+def fetch_db_targets(
+    session_factory,
+    cadence: str,
+    *,
+    public_host: str,
+) -> list[dict]:
+    """Return the active subscribers for `cadence` as data-file rows.
+
+    Drop-in replacement for `filter_targets` when the operator flips
+    the newsletter from report-config.yaml's static list to the
+    public subscribers table. Each returned dict carries the
+    keys the Tera templates reference:
+    `email`, `name`, `subject` (rendered per cadence), `unsubscribe_url`,
+    `reason`, plus any caller-supplied columns (e.g. `report`).
+
+    Suppression list hits are dropped here and logged; the caller
+    receives only the allow-listed rows.
+    """
+    from polymarket_insider_tracker.storage.repos import (
+        SubscribersRepository,
+        SuppressionListRepository,
+    )
+
+    async def _load() -> list[dict]:
+        async with session_factory() as session:
+            subs_repo = SubscribersRepository(session)
+            supp_repo = SuppressionListRepository(session)
+            actives = await subs_repo.active_for_cadence(cadence)
+            allowed, suppressed = await supp_repo.filter_subscribers(actives)
+            for sub, entry in suppressed:
+                LOG.info(
+                    "suppression hit: email=%s matched_pattern=%r reason=%r",
+                    sub.email,
+                    entry.pattern,
+                    entry.reason,
+                )
+            rows = []
+            for sub in allowed:
+                confirmed = sub.opt_in_confirmed_at
+                reason = (
+                    "you confirmed your subscription on "
+                    f"{confirmed:%Y-%m-%d}"
+                    if confirmed is not None
+                    else "you opted in to the polymarket insider newsletter"
+                )
+                rows.append(
+                    {
+                        "email": sub.email,
+                        "name": sub.name or sub.email,
+                        "unsubscribe_url": (
+                            f"https://{public_host}/unsubscribe"
+                            f"?token={sub.unsubscribe_token}"
+                        ),
+                        "reason": reason,
+                    }
+                )
+            return rows
+
+    return asyncio.run(_load())
+
+
 def write_delivery_ledger(
     session_factory,
     edition_id: str,
