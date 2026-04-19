@@ -96,3 +96,52 @@ jobs:
           fail_ci_if_error: false
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  scenarios:
+    # E2E scenario suite — exercises the full detector / rollup /
+    # newsletter-render path through the himalaya CLI. Separate job
+    # so a himalaya build failure doesn't block the unit-test run.
+    runs-on: ubuntu-latest
+    needs: [lint]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      # Download a pre-built himalaya binary from the fork's releases
+      # page. Matches the minVersion pinned in the AMI-STREAMS
+      # extension.manifest.yaml (see SPEC-MAIL §10). Operators can
+      # override HIMALAYA_VERSION in the workflow dispatch UI.
+      - name: Install himalaya
+        env:
+          HIMALAYA_VERSION: ${{ vars.HIMALAYA_VERSION || '1.2.0' }}
+        run: |
+          set -eux
+          mkdir -p "$GITHUB_WORKSPACE/.boot-linux/bin"
+          curl -fsSL \
+            "https://github.com/Independent-AI-Labs/himalaya/releases/download/v${HIMALAYA_VERSION}/himalaya-linux-x86_64" \
+            -o "$GITHUB_WORKSPACE/.boot-linux/bin/himalaya"
+          chmod +x "$GITHUB_WORKSPACE/.boot-linux/bin/himalaya"
+          "$GITHUB_WORKSPACE/.boot-linux/bin/himalaya" --version
+
+      - name: Verify golden-review gate
+        run: python scripts/review-snapshot.py --check
+
+      - name: Run scenario suite
+        env:
+          PATH: ${{ github.workspace }}/.boot-linux/bin:${{ env.PATH }}
+        run: pytest tests/scenarios -q
+
+      - name: Upload golden snapshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-snapshots
+          path: tests/scenarios/fixtures/golden/
+          if-no-files-found: warn

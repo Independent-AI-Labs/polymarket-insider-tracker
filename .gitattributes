@@ -1,0 +1,8 @@
+# Golden-file diffs render nicely as HTML — not strictly required but
+# makes `git log -p` + review tooling readable.
+tests/scenarios/fixtures/golden/*.html diff=html
+
+# Treat captured JSONL files as binary so tooling doesn't try to render
+# them in line-diff form. They are gitignored for real runs; a
+# minimal fixture copy lives under tests/scenarios/fixtures/inputs/.
+*.jsonl -diff
