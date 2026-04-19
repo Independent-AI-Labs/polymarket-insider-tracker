@@ -16,12 +16,19 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
+import re
+import uuid
+
 from polymarket_insider_tracker.storage.models import (
     AlertDailyRollupModel,
     DetectorMetricsModel,
+    EmailBounceModel,
+    EmailDeliveryModel,
     FundingTransferModel,
     SniperClusterMemberModel,
     SniperClusterModel,
+    SubscriberModel,
+    SuppressionEntryModel,
     WalletProfileModel,
     WalletRelationshipModel,
 )
@@ -806,3 +813,440 @@ class AlertRollupRepository:
             .limit(limit)
         )
         return [(row[0], int(row[1] or 0)) for row in result.all()]
+
+
+# ---------------------------------------------------------------------------
+# Phase F — subscribers, deliveries, bounces, suppression.
+# ---------------------------------------------------------------------------
+
+# Allowed cadence tags. Enforced by SubscribersRepository.insert_pending
+# so a malicious /subscribe POST can't smuggle arbitrary strings into the
+# cadences list.
+ALLOWED_CADENCES: frozenset[str] = frozenset({"daily", "weekly", "monthly"})
+
+# Subscriber lifecycle states as named constants.
+STATUS_PENDING = "pending_opt_in"
+STATUS_ACTIVE = "active"
+STATUS_BOUNCED = "bounced"
+STATUS_UNSUBSCRIBED = "unsubscribed"
+STATUS_SUPPRESSED = "suppressed"
+
+# REQ-MAIL-115: hard bounces trigger a flip after this many.
+DEFAULT_BOUNCE_THRESHOLD = 3
+
+
+@dataclass
+class SubscriberDTO:
+    """Data transfer object for a public subscriber row."""
+
+    email: str
+    cadences: list[str]
+    status: str
+    opt_in_token: str
+    unsubscribe_token: str
+    bounce_count: int = 0
+    name: str | None = None
+    opt_in_confirmed_at: datetime | None = None
+    last_bounce_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    id: int | None = None
+
+    @classmethod
+    def from_model(cls, m: SubscriberModel) -> SubscriberDTO:
+        return cls(
+            id=m.id,
+            email=m.email,
+            name=m.name,
+            cadences=[c.strip() for c in (m.cadences or "").split(",") if c.strip()],
+            status=m.status,
+            opt_in_token=m.opt_in_token,
+            opt_in_confirmed_at=m.opt_in_confirmed_at,
+            unsubscribe_token=m.unsubscribe_token,
+            bounce_count=m.bounce_count,
+            last_bounce_at=m.last_bounce_at,
+            created_at=m.created_at,
+            updated_at=m.updated_at,
+        )
+
+
+class SubscribersRepository:
+    """CRUD for public newsletter subscribers (REQ-MAIL-110..118)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    @staticmethod
+    def _normalise_email(raw: str) -> str:
+        """Lowercase + strip whitespace. CITEXT handles this on Postgres
+        but we also run on SQLite in tests."""
+        return raw.strip().lower()
+
+    @staticmethod
+    def _validate_cadences(cadences: list[str]) -> list[str]:
+        """Reject cadences not in ALLOWED_CADENCES; preserve order + dedup."""
+        seen: list[str] = []
+        for c in cadences:
+            normal = c.strip().lower()
+            if normal not in ALLOWED_CADENCES:
+                msg = f"invalid cadence: {c!r}"
+                raise ValueError(msg)
+            if normal not in seen:
+                seen.append(normal)
+        if not seen:
+            msg = "cadences must not be empty"
+            raise ValueError(msg)
+        return seen
+
+    async def insert_pending(
+        self,
+        *,
+        email: str,
+        cadences: list[str],
+        name: str | None = None,
+    ) -> SubscriberDTO:
+        """Insert a new `pending_opt_in` row or re-issue tokens idempotently.
+
+        If a row already exists with the same email:
+        - `pending_opt_in`: refresh tokens + timestamp so a stale
+          confirmation link is invalidated (the user likely lost the
+          first email).
+        - `active` / `unsubscribed` / `bounced`: don't touch it — the
+          caller should distinguish "already signed up" from "new
+          signup" via the returned status.
+        - `suppressed`: raise — signup is explicitly blocked.
+        """
+        email_norm = self._normalise_email(email)
+        cadence_list = self._validate_cadences(cadences)
+
+        existing = await self.session.execute(
+            select(SubscriberModel).where(SubscriberModel.email == email_norm)
+        )
+        row = existing.scalar_one_or_none()
+        if row is None:
+            model = SubscriberModel(
+                email=email_norm,
+                name=name,
+                cadences=",".join(cadence_list),
+                status=STATUS_PENDING,
+                opt_in_token=str(uuid.uuid4()),
+                unsubscribe_token=str(uuid.uuid4()),
+            )
+            self.session.add(model)
+            await self.session.flush()
+            return SubscriberDTO.from_model(model)
+
+        if row.status == STATUS_SUPPRESSED:
+            msg = f"{email_norm} is on the suppression list"
+            raise PermissionError(msg)
+
+        if row.status == STATUS_PENDING:
+            row.opt_in_token = str(uuid.uuid4())
+            row.cadences = ",".join(cadence_list)
+            if name is not None:
+                row.name = name
+            row.updated_at = datetime.now(UTC)
+            await self.session.flush()
+
+        return SubscriberDTO.from_model(row)
+
+    async def confirm_opt_in(self, token: str) -> SubscriberDTO | None:
+        """Flip the matching row from `pending_opt_in` to `active`.
+
+        Idempotent: a row already `active` stays `active`; invalid
+        tokens return None (no enumeration signal).
+        """
+        result = await self.session.execute(
+            select(SubscriberModel).where(SubscriberModel.opt_in_token == token)
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            return None
+        if row.status == STATUS_PENDING:
+            row.status = STATUS_ACTIVE
+            row.opt_in_confirmed_at = datetime.now(UTC)
+            row.updated_at = datetime.now(UTC)
+            await self.session.flush()
+        return SubscriberDTO.from_model(row)
+
+    async def unsubscribe(self, token: str) -> SubscriberDTO | None:
+        """Flip any row to `unsubscribed` by its unsubscribe token.
+
+        Idempotent + constant-time against valid-vs-invalid tokens
+        (REQ-MAIL-112); we still flush on no-op so the API response
+        pattern looks identical.
+        """
+        result = await self.session.execute(
+            select(SubscriberModel).where(
+                SubscriberModel.unsubscribe_token == token
+            )
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            return None
+        row.status = STATUS_UNSUBSCRIBED
+        row.updated_at = datetime.now(UTC)
+        await self.session.flush()
+        return SubscriberDTO.from_model(row)
+
+    async def active_for_cadence(self, cadence: str) -> list[SubscriberDTO]:
+        """Return the rows a cadence run should deliver to.
+
+        Filters to `status='active'` AND `cadence in subscriber.cadences`.
+        Suppression is applied on top in `filter_suppressed` so the
+        caller can log suppression hits separately (REQ-MAIL-132).
+        """
+        cadence_norm = cadence.strip().lower()
+        if cadence_norm not in ALLOWED_CADENCES:
+            msg = f"invalid cadence: {cadence!r}"
+            raise ValueError(msg)
+
+        result = await self.session.execute(
+            select(SubscriberModel).where(SubscriberModel.status == STATUS_ACTIVE)
+        )
+        out: list[SubscriberDTO] = []
+        for model in result.scalars().all():
+            dto = SubscriberDTO.from_model(model)
+            if cadence_norm in dto.cadences:
+                out.append(dto)
+        return out
+
+    async def record_bounce(
+        self,
+        *,
+        email: str,
+        bounce_type: str,
+        threshold: int = DEFAULT_BOUNCE_THRESHOLD,
+    ) -> SubscriberDTO | None:
+        """Increment `bounce_count`; flip to `bounced` if threshold crossed.
+
+        Only hard bounces count against the threshold per REQ-MAIL-115.
+        """
+        email_norm = self._normalise_email(email)
+        result = await self.session.execute(
+            select(SubscriberModel).where(SubscriberModel.email == email_norm)
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            return None
+
+        row.last_bounce_at = datetime.now(UTC)
+        if bounce_type == "hard":
+            row.bounce_count += 1
+            if row.bounce_count >= threshold and row.status == STATUS_ACTIVE:
+                row.status = STATUS_BOUNCED
+        row.updated_at = datetime.now(UTC)
+        await self.session.flush()
+        return SubscriberDTO.from_model(row)
+
+    async def delete_for_gdpr(self, email: str) -> bool:
+        """Remove a row entirely (REQ-MAIL-117 Art. 17 erasure).
+
+        Returns True if a row was deleted. Associated ledger + bounce
+        rows are preserved for compliance forensics — they no longer
+        have a subscriber_id foreign key after deletion.
+        """
+        email_norm = self._normalise_email(email)
+        result = await self.session.execute(
+            delete(SubscriberModel).where(SubscriberModel.email == email_norm)
+        )
+        return (result.rowcount or 0) > 0  # type: ignore[attr-defined]
+
+
+@dataclass
+class SuppressionEntryDTO:
+    """Data transfer object for a suppression-list row."""
+
+    pattern: str
+    pattern_type: str  # exact | domain | regex
+    reason: str | None = None
+    created_at: datetime | None = None
+    id: int | None = None
+
+
+class SuppressionListRepository:
+    """Pre-send filter that overrides any opt-in (REQ-MAIL-116)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def add(self, dto: SuppressionEntryDTO) -> SuppressionEntryDTO:
+        if dto.pattern_type not in ("exact", "domain", "regex"):
+            msg = f"invalid pattern_type: {dto.pattern_type!r}"
+            raise ValueError(msg)
+        model = SuppressionEntryModel(
+            pattern=dto.pattern.strip().lower(),
+            pattern_type=dto.pattern_type,
+            reason=dto.reason,
+        )
+        self.session.add(model)
+        await self.session.flush()
+        return SuppressionEntryDTO(
+            id=model.id,
+            pattern=model.pattern,
+            pattern_type=model.pattern_type,
+            reason=model.reason,
+            created_at=model.created_at,
+        )
+
+    async def matches(self, email: str) -> SuppressionEntryDTO | None:
+        """Return the matching suppression entry for an email, if any."""
+        email_norm = email.strip().lower()
+        domain = email_norm.rsplit("@", 1)[-1] if "@" in email_norm else ""
+        result = await self.session.execute(select(SuppressionEntryModel))
+        for model in result.scalars().all():
+            if model.pattern_type == "exact" and model.pattern == email_norm:
+                return _supp_dto(model)
+            if model.pattern_type == "domain" and model.pattern == domain:
+                return _supp_dto(model)
+            if model.pattern_type == "regex":
+                try:
+                    if re.fullmatch(model.pattern, email_norm):
+                        return _supp_dto(model)
+                except re.error:
+                    # Skip malformed regexes — operator will see them
+                    # in an audit but they mustn't break a live send.
+                    continue
+        return None
+
+    async def filter_subscribers(
+        self, subscribers: list[SubscriberDTO]
+    ) -> tuple[list[SubscriberDTO], list[tuple[SubscriberDTO, SuppressionEntryDTO]]]:
+        """Split subscribers into (allowed, suppressed-with-reason).
+
+        The newsletter builders log the suppressed list so
+        REQ-MAIL-132's audit trail exists.
+        """
+        allowed: list[SubscriberDTO] = []
+        suppressed: list[tuple[SubscriberDTO, SuppressionEntryDTO]] = []
+        for s in subscribers:
+            match = await self.matches(s.email)
+            if match is None:
+                allowed.append(s)
+            else:
+                suppressed.append((s, match))
+        return allowed, suppressed
+
+
+def _supp_dto(model: SuppressionEntryModel) -> SuppressionEntryDTO:
+    return SuppressionEntryDTO(
+        id=model.id,
+        pattern=model.pattern,
+        pattern_type=model.pattern_type,
+        reason=model.reason,
+        created_at=model.created_at,
+    )
+
+
+@dataclass
+class EmailDeliveryDTO:
+    """Ledger row (REQ-MAIL-130)."""
+
+    edition_id: str
+    cadence: str
+    email: str
+    outcome: str
+    queued_at: datetime
+    subscriber_id: int | None = None
+    message_id: str | None = None
+    relay_response: str | None = None
+    sent_at: datetime | None = None
+    id: int | None = None
+
+
+class EmailDeliveryRepository:
+    """Append-only send ledger. Readers: bounce-drain, forensic queries."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def record(self, dto: EmailDeliveryDTO) -> EmailDeliveryDTO:
+        model = EmailDeliveryModel(
+            edition_id=dto.edition_id,
+            cadence=dto.cadence,
+            subscriber_id=dto.subscriber_id,
+            email=dto.email.strip().lower(),
+            message_id=dto.message_id,
+            relay_response=dto.relay_response,
+            outcome=dto.outcome,
+            queued_at=dto.queued_at,
+            sent_at=dto.sent_at,
+        )
+        self.session.add(model)
+        await self.session.flush()
+        return EmailDeliveryDTO(
+            id=model.id,
+            edition_id=model.edition_id,
+            cadence=model.cadence,
+            subscriber_id=model.subscriber_id,
+            email=model.email,
+            message_id=model.message_id,
+            relay_response=model.relay_response,
+            outcome=model.outcome,
+            queued_at=model.queued_at,
+            sent_at=model.sent_at,
+        )
+
+    async def find_by_message_id(self, message_id: str) -> EmailDeliveryDTO | None:
+        """Match a DSN's Message-ID back to its originating send."""
+        result = await self.session.execute(
+            select(EmailDeliveryModel).where(
+                EmailDeliveryModel.message_id == message_id
+            )
+        )
+        model = result.scalar_one_or_none()
+        if model is None:
+            return None
+        return EmailDeliveryDTO(
+            id=model.id,
+            edition_id=model.edition_id,
+            cadence=model.cadence,
+            subscriber_id=model.subscriber_id,
+            email=model.email,
+            message_id=model.message_id,
+            relay_response=model.relay_response,
+            outcome=model.outcome,
+            queued_at=model.queued_at,
+            sent_at=model.sent_at,
+        )
+
+
+@dataclass
+class EmailBounceDTO:
+    """Parsed DSN (REQ-MAIL-131)."""
+
+    email: str
+    bounce_type: str  # hard | soft | challenge | unknown
+    reported_at: datetime
+    delivery_id: int | None = None
+    diagnostic: str | None = None
+    id: int | None = None
+
+
+class EmailBounceRepository:
+    """Parsed-DSN store. Written by the bounce-drain cron."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def record(self, dto: EmailBounceDTO) -> EmailBounceDTO:
+        if dto.bounce_type not in ("hard", "soft", "challenge", "unknown"):
+            msg = f"invalid bounce_type: {dto.bounce_type!r}"
+            raise ValueError(msg)
+        model = EmailBounceModel(
+            delivery_id=dto.delivery_id,
+            email=dto.email.strip().lower(),
+            bounce_type=dto.bounce_type,
+            diagnostic=dto.diagnostic,
+            reported_at=dto.reported_at,
+        )
+        self.session.add(model)
+        await self.session.flush()
+        return EmailBounceDTO(
+            id=model.id,
+            delivery_id=model.delivery_id,
+            email=model.email,
+            bounce_type=model.bounce_type,
+            diagnostic=model.diagnostic,
+            reported_at=model.reported_at,
+        )
