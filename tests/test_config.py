@@ -64,8 +64,10 @@ class TestRedisSettings:
 
     def test_default_url(self) -> None:
         """Test default Redis URL."""
+        # _env_file=None so the project's .env doesn't leak into a
+        # defaults-only assertion.
         with patch.dict(os.environ, {}, clear=True):
-            settings = RedisSettings()
+            settings = RedisSettings(_env_file=None)
             assert settings.url == "redis://localhost:6379"
 
     def test_custom_url(self) -> None:
@@ -89,7 +91,7 @@ class TestPolygonSettings:
     def test_default_rpc_url(self) -> None:
         """Test default Polygon RPC URL."""
         with patch.dict(os.environ, {}, clear=True):
-            settings = PolygonSettings()
+            settings = PolygonSettings(_env_file=None)
             assert settings.rpc_url == "https://polygon-rpc.com"
             assert settings.fallback_rpc_url is None
 
@@ -121,7 +123,7 @@ class TestPolymarketSettings:
     def test_default_ws_url(self) -> None:
         """Test default Polymarket WebSocket URL."""
         with patch.dict(os.environ, {}, clear=True):
-            settings = PolymarketSettings()
+            settings = PolymarketSettings(_env_file=None)
             assert "polymarket.com" in settings.ws_url
             assert settings.api_key is None
 
@@ -147,7 +149,7 @@ class TestDiscordSettings:
     def test_disabled_by_default(self) -> None:
         """Test Discord is disabled when no webhook URL."""
         with patch.dict(os.environ, {}, clear=True):
-            settings = DiscordSettings()
+            settings = DiscordSettings(_env_file=None)
             assert not settings.enabled
             assert settings.webhook_url is None
 
@@ -165,17 +167,19 @@ class TestTelegramSettings:
     def test_disabled_by_default(self) -> None:
         """Test Telegram is disabled when no credentials."""
         with patch.dict(os.environ, {}, clear=True):
-            settings = TelegramSettings()
+            settings = TelegramSettings(_env_file=None)
             assert not settings.enabled
 
     def test_disabled_with_partial_config(self) -> None:
         """Test Telegram is disabled with only token or chat_id."""
-        with patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "token123"}):
-            settings = TelegramSettings()
+        # Clear the environment of the *other* Telegram var too — otherwise
+        # .env's paired token+chat_id leak in and make `enabled` true.
+        with patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "token123"}, clear=True):
+            settings = TelegramSettings(_env_file=None)
             assert not settings.enabled
 
-        with patch.dict(os.environ, {"TELEGRAM_CHAT_ID": "12345"}):
-            settings = TelegramSettings()
+        with patch.dict(os.environ, {"TELEGRAM_CHAT_ID": "12345"}, clear=True):
+            settings = TelegramSettings(_env_file=None)
             assert not settings.enabled
 
     def test_enabled_with_full_config(self) -> None:
@@ -212,8 +216,9 @@ class TestSettings:
         with patch.dict(
             os.environ,
             {"DATABASE_URL": "postgresql://user:pass@localhost/db"},
+            clear=True,
         ):
-            settings = Settings()
+            settings = Settings(_env_file=None)
             assert settings.log_level == "INFO"
 
     def test_custom_log_level(self) -> None:

@@ -1,0 +1,139 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Polymarket Report Configuration
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Data source ──────────────────────────────────────────────────────────────
+api:
+  base_url: "https://gamma-api.polymarket.com"
+  user_agent: "AMI-Reports/1.0"
+  timeout_seconds: 30
+
+# ── Report sections — each becomes a table in the markdown + PDF ─────────────
+# Available order fields: volume24hr, volume, liquidityClob, startDate, endDate
+# Each section fetches from: {base_url}/markets?limit={limit}&order={order}&ascending={ascending}&active={active}
+sections:
+  - title: "Top Markets by 24-Hour Volume"
+    order: volume24hr
+    ascending: false
+    active: true
+    limit: 20
+
+  - title: "Top Markets by Liquidity"
+    order: liquidityClob
+    ascending: false
+    active: true
+    limit: 20
+
+  - title: "Recently Created Markets"
+    order: startDate
+    ascending: false
+    active: true
+    limit: 15
+
+  - title: "Markets Closing Soon"
+    order: endDate
+    ascending: true
+    active: true
+    closed: false
+    limit: 15
+
+# ── Table columns — controls which fields appear in markdown tables ──────────
+# Available fields: question, volume24hr, volume, liquidityClob, bestBid, bestAsk, endDate
+columns:
+  - field: question
+    header: "Question"
+    max_width: 65
+  - field: volume24hr
+    header: "24h Vol"
+    format: usd
+  - field: volume
+    header: "Total Vol"
+    format: usd
+  - field: liquidityClob
+    header: "Liquidity"
+    format: usd
+  - field: bestBid/bestAsk
+    header: "Bid/Ask"
+    format: bid_ask
+  - field: endDate
+    header: "End Date"
+    format: date
+
+# ── Observation rules — auto-detect interesting patterns ─────────────────────
+observations:
+  # Flag markets where 24h volume is N times greater than liquidity
+  thin_book:
+    enabled: true
+    min_ratio: 8
+    scan_top_n: 10           # only check top N by volume
+    section: 0               # index into sections[] to scan
+
+  # Flag markets trading near 0 or 1 (resolved/near-certain)
+  near_certain:
+    enabled: true
+    low_threshold: 0.05
+    high_threshold: 0.92
+    scan_top_n: 10
+    section: 0
+    # Skip sports markets by keyword
+    skip_keywords: ["vs.", "o/u", "spread", "over/under"]
+
+# ── Email content ────────────────────────────────────────────────────────────
+# Sender identity lives in himalaya's account config now — see
+# config/himalaya-account-polymarket.toml.
+email:
+  subject_template: "[AMI] Polymarket Snapshot — {date}"
+
+  # How many rows from the first section to show in the HTML email summary
+  summary_top_n: 5
+
+  # Max observations to include in email body
+  max_observations: 5
+
+  # HTML email styling
+  style:
+    header_bg: "#1a1a2e"
+    header_text: "#ffffff"
+    accent_color: "#aaaaaa"
+    font_family: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+    max_width: "640px"
+
+  footer_text: "Full report attached as PDF · Data from Polymarket Gamma API · AMI Reports"
+
+# ── PDF conversion ───────────────────────────────────────────────────────────
+pdf:
+  engine: wkhtmltopdf        # pandoc --pdf-engine value
+  margins:
+    top: 15
+    bottom: 15
+    left: 12
+    right: 12
+
+# ── Delivery ────────────────────────────────────────────────────────────────
+# SMTP host / port / sender live in himalaya's TOML config under the account
+# named here. See config/himalaya-account-polymarket.toml for the fragment to
+# append to ~/.config/himalaya/config.toml.
+delivery:
+  # Name of the himalaya account this script sends through.
+  account: "polymarket"
+
+  # Default `--rate` passed to `himalaya batch send`. Format: N/sec, N/min,
+  # N/hour, or the literal "unlimited".
+  rate: "5/min"
+
+  targets:
+    - name: "vlad"
+      email: "vladislav.donchev@gmail.com"
+      enabled: true
+
+    # Example additional targets (disabled by default):
+    # - name: "team-slack"
+    #   email: "team-channel@slack-relay.example.com"
+    #   enabled: false
+    #   subject_template: "[Polymarket] Daily snapshot {date}"
+
+# ── Output paths ─────────────────────────────────────────────────────────────
+output:
+  dir: "reports"             # relative to project root
+  markdown: "market-snapshot-{date}.md"
+  pdf: "market-snapshot-{date}.pdf"

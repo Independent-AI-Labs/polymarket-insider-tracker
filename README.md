@@ -306,6 +306,72 @@ This software is provided for **educational and research purposes only**.
 
 ---
 
+## Daily market newsletter
+
+`scripts/send-report.py` produces a daily Polymarket snapshot and fans it
+out through the `ami-mail` himalaya fork using `himalaya batch send`.
+Responsibilities split as:
+
+- **Python** — Polymarket Gamma API fetch, observation rules, summary
+  stats, markdown render (Jinja2), PDF generation via pandoc.
+- **himalaya** — Tera-renders the HTML email body per recipient from
+  `scripts/templates/polymarket-newsletter.html` against a YAML data file
+  the script emits, attaches the PDF, and delivers. The Python side
+  performs exactly one `subprocess.run("himalaya batch send ...")` call.
+- **Mail config** (SMTP host / port / sender / auth) lives entirely in
+  `~/.config/himalaya/config.toml` — the project carries no SMTP settings.
+
+### Mail setup (one-time)
+
+1. Install the ami-mail binary — it's provisioned by the shared
+   `ami_mail` Ansible role at
+   `projects/AMI-STREAMS/ansible/roles/ami_mail/` (builds the fork at
+   `projects/AMI-STREAMS/himalaya/` and symlinks `.boot-linux/bin/ami-mail`).
+   A local build works too: `bash projects/AMI-STREAMS/scripts/build-himalaya.sh`.
+2. Append `config/himalaya-account-polymarket.toml` to
+   `~/.config/himalaya/config.toml`. That registers an `[accounts.polymarket]`
+   stanza pointing at the LAN exim-relay — no OAuth, no keyring, LAN-only.
+3. Edit `scripts/report-config.yaml`: under `delivery.targets`, set your
+   recipients. `delivery.account` must match the TOML account name
+   (default: `polymarket`). `delivery.rate` (default `5/min`) is passed
+   through to `himalaya batch send --rate`.
+
+### Running manually
+
+```bash
+# Dry-run: generate markdown + PDF; himalaya renders the email but
+# never connects to SMTP.
+uv run python scripts/send-report.py --dry-run
+
+# --no-send: skip delivery entirely, leave markdown + PDF on disk.
+uv run python scripts/send-report.py --no-send
+
+# Force a specific subset of targets (overrides the `enabled` flag).
+uv run python scripts/send-report.py --targets vlad,archive
+
+# Real run — sends mail.
+uv run python scripts/send-report.py
+```
+
+### Scheduling via ami-cron
+
+Daily at 13:00 UTC:
+
+```bash
+ami-cron add "0 13 * * *" \
+  "cd \$AMI_ROOT/projects/polymarket-insider-tracker && uv run python scripts/send-report.py" \
+  --label polymarket-newsletter
+
+# Inspect / remove later
+ami-cron list
+ami-cron remove polymarket-newsletter
+```
+
+`ami-cron` injects `AMI_ROOT` and `.boot-linux/bin` onto `PATH` so the
+cron entry resolves `himalaya` / `uv` without a wrapper script.
+
+---
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.

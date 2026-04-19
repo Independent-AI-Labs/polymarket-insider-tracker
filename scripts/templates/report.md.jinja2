@@ -1,0 +1,36 @@
+{# ── Full Markdown Report Template ─────────────────────────────────────────── #}
+{# Context variables:                                                          #}
+{#   date        — report date string (YYYY-MM-DD)                            #}
+{#   generated   — UTC timestamp string                                        #}
+{#   stats       — dict with summary stats (total_24h_vol, total_vol, etc.)   #}
+{#   sections    — list of {title, markets: [{question, volume24hr, ...}]}     #}
+{#   observations — list of observation strings                                #}
+{#   config      — the full YAML config dict                                   #}
+# {{ config.email.subject_template | replace('{date}', date) | replace('[AMI] ', '') }}
+
+*Generated: {{ generated }} UTC*
+
+## Summary
+
+{% for key, value in stats.items() -%}
+- **{{ key }}**: {{ value }}
+{% endfor %}
+{% for section in sections %}
+## {{ loop.index }}. {{ section.title }}
+
+| # | {% for col in config.columns %}{{ col.header }} | {% endfor %}
+
+|---|{% for col in config.columns %}{% if col.format == 'usd' %}--------:|{% elif col.format == 'bid_ask' %}--------:|{% elif col.format == 'date' %}----------|{% else %}----------|{% endif %}{% endfor %}
+
+{% for m in section.markets -%}
+| {{ loop.index }} | {% for col in config.columns %}{{ m[col.header] }} | {% endfor %}
+
+{% endfor %}
+{% endfor %}
+## Notable Observations
+
+{% for obs in observations -%}
+- {{ obs }}
+{% endfor %}
+---
+*Data source: Polymarket Gamma API*
