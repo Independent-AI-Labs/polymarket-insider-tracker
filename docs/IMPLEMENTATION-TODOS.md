@@ -172,37 +172,37 @@ Numbering is `P.S.T` = Phase · Section · Task.
 
 ### 3.1 Fixture design
 
-- [ ] **3.1.1** Input: one BUY NO trade at $48k against a
+- [x] **3.1.1** Input: one BUY NO trade at $48k against a
   daily-volume-$680k market (7% impact). Wallet `0xdef…789`, age
   18 months, nonce 500 → fresh_wallet suppressed.
-- [ ] **3.1.2** Snapshots: `daily_volume=680000, book_depth=200000`.
+- [x] **3.1.2** Snapshots: `daily_volume=680000, book_depth=200000`.
   Book-impact = 48000/200000 = 24% → also triggers the
   `DEFAULT_BOOK_THRESHOLD=0.05` branch.
-- [ ] **3.1.3** Add a second decoy trade at $10k against the same
+- [x] **3.1.3** Add a second decoy trade at $10k against the same
   market (1.5% impact → below threshold).
 
 ### 3.2 Assertions
 
-- [ ] **3.2.1** 1 `size_anomaly` assessment only; no `fresh_wallet`,
+- [x] **3.2.1** 1 `size_anomaly` assessment only; no `fresh_wallet`,
   no `niche_market` (volume > $50k).
-- [ ] **3.2.2** Assessment metadata exposes both volume impact
+- [x] **3.2.2** Assessment metadata exposes both volume impact
   (~7.1%) and book impact (~24%).
-- [ ] **3.2.3** `detector_metrics` row after aggregator run: 1
+- [x] **3.2.3** `detector_metrics` row after aggregator run: 1
   alert, hits+misses+pending totals to 1.
-- [ ] **3.2.4** Daily newsletter contains "7." (volume-impact %)
+- [x] **3.2.4** Daily newsletter contains "7." (volume-impact %)
   and "48," (notional formatting) and the market question.
 
 ### 3.3 Golden file
 
-- [ ] **3.3.1** `tests/scenarios/fixtures/golden/unusual-sizing-daily.html`,
+- [x] **3.3.1** `tests/scenarios/fixtures/golden/unusual-sizing-daily.html`,
   same operator-review gate as 2.3.2.
 
 ### 3.4 Negative controls
 
-- [ ] **3.4.1** Mutate `daily_volume` up by 10× → no alert.
-- [ ] **3.4.2** Omit `book_depth` → detector falls back to volume
+- [x] **3.4.1** Mutate `daily_volume` up by 10× → no alert.
+- [x] **3.4.2** Omit `book_depth` → detector falls back to volume
   branch; alert still fires with volume-only reason string.
-- [ ] **3.4.3** `daily_volume=None` AND `book_depth=None` → no
+- [x] **3.4.3** `daily_volume=None` AND `book_depth=None` → no
   alert (can't evaluate).
 
 ---
@@ -211,36 +211,36 @@ Numbering is `P.S.T` = Phase · Section · Task.
 
 ### 4.1 Fixture design
 
-- [ ] **4.1.1** Input: 2 BUY trades at $2,500 and $4,200 into a
+- [x] **4.1.1** Input: 2 BUY trades at $2,500 and $4,200 into a
   market with `daily_volume=$25k, category='other'`.
-- [ ] **4.1.2** Snapshots: deterministic; both wallets older than
+- [x] **4.1.2** Snapshots: deterministic; both wallets older than
   48h so fresh_wallet doesn't compound.
 
 ### 4.2 Assertions
 
-- [ ] **4.2.1** Both trades emit `niche_market` + `size_anomaly`
+- [x] **4.2.1** Both trades emit `niche_market` + `size_anomaly`
   (each trade > 2% of $25k).
-- [ ] **4.2.2** Composite weighted_score reflects the ×1.2
+- [x] **4.2.2** Composite weighted_score reflects the ×1.2
   multi-signal boost.
-- [ ] **4.2.3** `alert_daily_rollup.signal='niche_market'` row:
+- [x] **4.2.3** `alert_daily_rollup.signal='niche_market'` row:
   `alert_count=2, unique_wallets=2`.
-- [ ] **4.2.4** **Weekly** newsletter (not daily) body contains the
+- [x] **4.2.4** **Weekly** newsletter (not daily) body contains the
   market id in the "Niche-market targeting" section — the first
   weekly-cadence assertion in the harness.
-- [ ] **4.2.5** `Scenario.when_newsletter_built("weekly")` drives
+- [x] **4.2.5** `Scenario.when_newsletter_built("weekly")` drives
   the weekly builder end-to-end, including the
   `top_markets_for_window` query against `alert_daily_rollup`.
 
 ### 4.3 Golden file
 
-- [ ] **4.3.1** `tests/scenarios/fixtures/golden/niche-market-weekly.html`.
+- [x] **4.3.1** `tests/scenarios/fixtures/golden/niche-market-weekly.html`.
 
 ### 4.4 Negative controls
 
-- [ ] **4.4.1** Bump `daily_volume` to $100k → `niche_market`
+- [x] **4.4.1** Bump `daily_volume` to $100k → `niche_market`
   dropped; assertion in the weekly template adapts (market not
   listed).
-- [ ] **4.4.2** Category `politics` (not in
+- [x] **4.4.2** Category `politics` (not in
   `NICHE_PRONE_CATEGORIES`) at $25k volume: no `niche_market`
   alert; only `size_anomaly` fires.
 

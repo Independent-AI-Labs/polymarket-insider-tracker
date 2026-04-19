@@ -1,0 +1,21 @@
+himalaya-ok email=alice@example.com status=dry-run
+data=- email: alice@example.com
+  name: Alice
+  subject: '[AMI] Polymarket — Weekly Recap 2026-04-20'
+  report:
+    window_start: '2026-04-13'
+    window_end: '2026-04-20'
+    generated: 2026-04-21 08:00
+    title: Polymarket Insider — weekly recap (2026-04-13 to 2026-04-20)
+    metrics_rows:
+    - signal: niche_market
+      alerts_total: 2
+      hits: 1
+      misses: 0
+      pending: 1
+      precision: 100.0%
+    top_markets_rows:
+    - market_id: 0xgoogle-year-in-search-2025-rank-1
+      alert_count: 2
+    cluster_rows: []
+

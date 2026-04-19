@@ -239,11 +239,18 @@ async def replay_capture(
             and notional / market.daily_volume > Decimal("0.02")
         ):
             signals.append("size_anomaly")
+        # Niche-market signal: the production detector gates on BOTH
+        # low daily volume AND a niche-prone category (see
+        # `detector/size_anomaly.py:NICHE_PRONE_CATEGORIES`). Replay
+        # must stay in parity, otherwise scenario tests false-positive
+        # on categories like `politics`.
+        niche_categories = {"science", "tech", "finance", "other"}
         if (
             market is not None
             and market.daily_volume is not None
             and market.daily_volume < Decimal("50000")
             and notional >= Decimal("1000")
+            and (market.category or "").lower() in niche_categories
         ):
             signals.append("niche_market")
 

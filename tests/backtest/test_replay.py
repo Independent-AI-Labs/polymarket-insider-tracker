@@ -86,12 +86,17 @@ def _make_wallet_resolver(is_fresh: bool, nonce: int = 2):
     return _resolve
 
 
-def _make_market_resolver(daily_volume: Decimal | None, book_depth: Decimal | None = None):
+def _make_market_resolver(
+    daily_volume: Decimal | None,
+    book_depth: Decimal | None = None,
+    category: str = "other",
+):
     async def _resolve(market_id: str, at: datetime) -> MarketSnapshot:
         return MarketSnapshot(
             market_id=market_id,
             daily_volume=daily_volume,
             book_depth=book_depth,
+            category=category,
         )
     return _resolve
 
