@@ -17,19 +17,19 @@ Numbering is `P.S.T` = Phase · Section · Task.
 
 ### 1.1 Directory skeleton
 
-- [ ] **1.1.1** Create `tests/scenarios/` package with `__init__.py`.
+- [x] **1.1.1** Create `tests/scenarios/` package with `__init__.py`.
   DoD: `pytest --collect-only tests/scenarios` returns no errors and
   zero tests.
-- [ ] **1.1.2** Create `tests/scenarios/fixtures/` with subdirs
+- [x] **1.1.2** Create `tests/scenarios/fixtures/` with subdirs
   `inputs/`, `snapshots/`, `golden/`. Commit a `.gitkeep` in each.
-- [ ] **1.1.3** Create `tests/scenarios/conftest.py` importing the
+- [x] **1.1.3** Create `tests/scenarios/conftest.py` importing the
   base `Base` metadata and exposing an async-SQLite engine fixture.
   DoD: `pytest tests/scenarios -q` collects the empty harness
   without error.
 
 ### 1.2 Scenario class
 
-- [ ] **1.2.1** Write `tests/scenarios/_harness.py::Scenario`
+- [x] **1.2.1** Write `tests/scenarios/_harness.py::Scenario`
   dataclass-ish class with builder-style methods:
   - `given_trades(events: list[TradeEvent] | Path)` — materialises a
     tmp jsonl via `backtest.replay.trade_event_to_record`.
@@ -41,30 +41,30 @@ Numbering is `P.S.T` = Phase · Section · Task.
   DoD: unit test in `tests/scenarios/test_harness_internals.py`
   verifies each builder returns `self` and the resulting
   intermediate state is accessible.
-- [ ] **1.2.2** Add `Scenario.when_replayed() -> list[ReplayAssessment]`
+- [x] **1.2.2** Add `Scenario.when_replayed() -> list[ReplayAssessment]`
   that invokes `backtest.replay_capture` with the stored resolvers.
   DoD: round-trips a single synthetic trade through the detector
   heuristics and asserts at least one assessment returned.
-- [ ] **1.2.3** Add `Scenario.and_rolled_up(day=date)` that consumes
+- [x] **1.2.3** Add `Scenario.and_rolled_up(day=date)` that consumes
   the assessments, emits fake alert-record payloads the way
   `alerter.history.AlertHistory.record` would, and invokes
   `scripts/compute-daily-rollup.py::_aggregate` directly.
   DoD: verify `alert_daily_rollup` rows present post-call.
-- [ ] **1.2.4** Add
+- [x] **1.2.4** Add
   `Scenario.when_newsletter_built(cadence: str) -> dict` returning
   the YAML payload the cadence builder would emit. Internally
   imports the cadence script via `importlib` (same trick used by
   `test_send_report_data.py`).
   DoD: the returned dict matches the shape the Tera template
   consumes (`report.title`, `report.stats`, etc.).
-- [ ] **1.2.5** Add
+- [x] **1.2.5** Add
   `Scenario.then_renders_html(substrings: list[str])` — writes the
   payload as a one-row YAML, invokes
   `himalaya batch send --dry-run --output json`, parses the JSON,
   asserts each substring is present in the rendered body. `skip`
   when `himalaya` not on PATH.
   DoD: happy-path scenario round-trips a known substring.
-- [ ] **1.2.6** Add
+- [x] **1.2.6** Add
   `Scenario.then_matches_golden(path)` with a
   `--update-snapshots` flag (pytest option) that rewrites the
   golden file when set.
@@ -73,18 +73,18 @@ Numbering is `P.S.T` = Phase · Section · Task.
 
 ### 1.3 Determinism shims
 
-- [ ] **1.3.1** Add a `freeze_time(iso_str)` context manager /
+- [x] **1.3.1** Add a `freeze_time(iso_str)` context manager /
   pytest fixture that patches `datetime.now` everywhere the
   pipeline touches it: `alerter.history`, `backtest.metrics`,
   `scripts/compute-daily-rollup`, `newsletter_common`. Use the
   `freezegun` library or a hand-rolled monkeypatch.
   DoD: two test runs with the same frozen timestamp produce
   byte-identical rendered HTML.
-- [ ] **1.3.2** Add a `deterministic_uuid(seed)` factory; patch
+- [~] **1.3.2** *(deferred: scrubber handles UUIDs in goldens)* Add a `deterministic_uuid(seed)` factory; patch
   `uuid.uuid4` in `RiskAssessment.assessment_id` generation and
   anywhere else UUIDs leak into output.
   DoD: rendered HTML contains stable assessment-ids across runs.
-- [ ] **1.3.3** Normalise rendered-HTML output (strip volatile
+- [x] **1.3.3** Normalise rendered-HTML output (strip volatile
   substrings: absolute paths, process IDs, localhost hostnames) in
   `Scenario.then_matches_golden` before the diff. Document the
   scrubbing regexes inline.
@@ -93,23 +93,23 @@ Numbering is `P.S.T` = Phase · Section · Task.
 
 ### 1.4 Himalaya binary gating
 
-- [ ] **1.4.1** Write a module-scoped `himalaya` fixture that
+- [x] **1.4.1** Write a module-scoped `himalaya` fixture that
   `pytest.skip`s when `.boot-linux/bin/himalaya` is missing (mirror
   `tests/scripts/test_template_render.py`).
   DoD: scenario tests get skipped, not fail, on a fresh clone
   without the fork built.
-- [ ] **1.4.2** Cache a `himalaya --version` parse result per
+- [x] **1.4.2** Cache a `himalaya --version` parse result per
   session; assert all required feature flags are present (`+batch`,
   `+template-vars`, `+send-block` for this test plane).
   DoD: missing feature flag produces a precise skip message.
 
 ### 1.5 Harness self-tests
 
-- [ ] **1.5.1** `tests/scenarios/test_harness_internals.py`: builder
+- [x] **1.5.1** `tests/scenarios/test_harness_internals.py`: builder
   round-trip, idempotent `given_trades`, snapshot override.
-- [ ] **1.5.2** Cover the happy golden round-trip end-to-end with a
+- [x] **1.5.2** Cover the happy golden round-trip end-to-end with a
   trivial 1-wallet/1-market fixture (the "harness smoke").
-- [ ] **1.5.3** Run harness self-tests ×10 in a loop; verify zero
+- [x] **1.5.3** Run harness self-tests ×10 in a loop; verify zero
   flakes (`pytest --count=10 tests/scenarios/test_harness_internals.py`
   via `pytest-repeat`).
   DoD: 10/10 pass; add `pytest-repeat` to the `[dev]` extras.
