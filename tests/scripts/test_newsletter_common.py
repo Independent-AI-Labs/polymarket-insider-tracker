@@ -56,6 +56,71 @@ class TestParseHimalayaSummary:
         assert nc._parse_himalaya_summary('{"results":"oops"}') is None
 
 
+class TestFetchDbTargets:
+    """Exercises fetch_db_targets against an in-memory SQLite database."""
+
+    def test_returns_active_rows_with_unsubscribe_url(self, nc, tmp_path):
+        import asyncio
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from polymarket_insider_tracker.storage.models import Base
+        from polymarket_insider_tracker.storage.repos import (
+            SubscribersRepository,
+            SuppressionEntryDTO,
+            SuppressionListRepository,
+        )
+
+        db_path = tmp_path / "test.db"
+        url = f"sqlite+aiosqlite:///{db_path}"
+
+        async def _bootstrap() -> None:
+            engine = create_async_engine(url)
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+            async with factory() as s:
+                subs = SubscribersRepository(s)
+                active = await subs.insert_pending(
+                    email="active@x.com", cadences=["daily"]
+                )
+                await subs.confirm_opt_in(active.opt_in_token)
+                pending = await subs.insert_pending(
+                    email="pending@x.com", cadences=["daily"]
+                )
+                bad = await subs.insert_pending(
+                    email="bad@spam.example", cadences=["daily"]
+                )
+                await subs.confirm_opt_in(bad.opt_in_token)
+                supp = SuppressionListRepository(s)
+                await supp.add(
+                    SuppressionEntryDTO(
+                        pattern="spam.example",
+                        pattern_type="domain",
+                        reason="abuse",
+                    )
+                )
+                await s.commit()
+            await engine.dispose()
+
+        asyncio.run(_bootstrap())
+
+        engine = create_async_engine(url)
+        factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+        try:
+            rows = nc.fetch_db_targets(
+                factory, "daily", public_host="newsletter.test"
+            )
+        finally:
+            asyncio.run(engine.dispose())
+
+        emails = sorted(r["email"] for r in rows)
+        assert emails == ["active@x.com"]
+        row = rows[0]
+        assert row["unsubscribe_url"].startswith(
+            "https://newsletter.test/unsubscribe?token="
+        )
+        assert "confirmed" in row["reason"].lower()
+
+
 class TestFilterTargets:
     def test_enabled_only_by_default(self, nc):
         targets = [
