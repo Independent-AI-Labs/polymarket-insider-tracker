@@ -114,11 +114,21 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev]"
 
-      # Download a pre-built himalaya binary from the fork's releases
-      # page. Matches the minVersion pinned in the AMI-STREAMS
+      # Cache the pre-built himalaya binary between runs. Key is the
+      # pinned version so re-runs on the same version do a cache hit
+      # (no GitHub release download), and a version bump invalidates
+      # cleanly. Matches minVersion in the AMI-STREAMS
       # extension.manifest.yaml (see SPEC-MAIL §10). Operators can
-      # override HIMALAYA_VERSION in the workflow dispatch UI.
-      - name: Install himalaya
+      # override HIMALAYA_VERSION via repo-level Actions variables.
+      - name: Cache himalaya binary
+        id: cache-himalaya
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.boot-linux/bin/himalaya
+          key: himalaya-linux-x86_64-${{ vars.HIMALAYA_VERSION || '1.2.0' }}
+
+      - name: Download himalaya (cache miss)
+        if: steps.cache-himalaya.outputs.cache-hit != 'true'
         env:
           HIMALAYA_VERSION: ${{ vars.HIMALAYA_VERSION || '1.2.0' }}
         run: |
@@ -127,6 +137,11 @@ jobs:
           curl -fsSL \
             "https://github.com/Independent-AI-Labs/himalaya/releases/download/v${HIMALAYA_VERSION}/himalaya-linux-x86_64" \
             -o "$GITHUB_WORKSPACE/.boot-linux/bin/himalaya"
+          chmod +x "$GITHUB_WORKSPACE/.boot-linux/bin/himalaya"
+
+      - name: Verify himalaya binary
+        run: |
+          set -eux
           chmod +x "$GITHUB_WORKSPACE/.boot-linux/bin/himalaya"
           "$GITHUB_WORKSPACE/.boot-linux/bin/himalaya" --version
 
