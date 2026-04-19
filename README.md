@@ -14,7 +14,9 @@ On January 3, 2026, a trader spotted a significant political event on Polymarket
 > "You don't need to predict the future, you need to track suspicious behavior."
 > — [@DidiTrading](https://x.com/DidiTrading)
 
-An insider wallet turned **$35,000 into $442,000** (12.6x return) by entering a position hours before a major market move. The tool that detected this activity flagged five separate alerts before the event occurred.
+An insider wallet turned **$35,000 into $442,000** (12.6x return) by entering a position hours before a major market move. The tool that detected this activity flagged five separate alerts before the event occurred.[^didi]
+
+[^didi]: Attributed to [@DidiTrading](https://x.com/DidiTrading). This repo's detector stack hasn't been validated against that specific wallet/market yet — the Phase C backtesting harness (see [`docs/CLAIMS-AUDIT.md`](docs/CLAIMS-AUDIT.md)) replays recorded trade streams through the live detectors and measures precision / recall / PnL uplift per signal.
 
 **This repository builds that tool.**
 
@@ -40,7 +42,8 @@ When suspicious activity is detected, you receive an instant alert with actionab
 ```
 ┌─────────────────┐     ┌──────────────────┐     ┌────────────────────┐
 │  Polymarket API │────>│  Wallet Profiler │────>│  Anomaly Detector  │
-│  (Real-time)    │     │  (Blockchain)    │     │  (ML + Heuristics) │
+│  (Real-time)    │     │  (Blockchain)    │     │ (Heuristics,       │
+│                 │     │                  │     │  ML-ready)         │
 └─────────────────┘     └──────────────────┘     └────────────────────┘
                                                           │
                               ┌────────────────────────────┘
@@ -62,16 +65,12 @@ When suspicious activity is detected, you receive an instant alert with actionab
 
 2. **Liquidity Impact Analysis**
    - Calculates trade size relative to market depth
-   - Flags trades consuming more than 2% of visible order book
+   - Flags trades consuming more than **5% of visible order book depth** (tunable via `book_threshold` constructor arg) or **2% of 24h volume** (tunable via `volume_threshold`)
    - Weights by market category (niche markets score higher)
 
 3. **Sniper Cluster Detection**
    - Uses DBSCAN clustering to find wallets that consistently enter markets within minutes of creation
    - Identifies coordinated behavior patterns
-
-4. **Event Correlation**
-   - Cross-references trading activity with news feeds
-   - Detects positions opened 1-4 hours before related news breaks
 
 ---
 
@@ -88,7 +87,7 @@ Size: $15,000 USDC (8.2% of daily volume)
 Risk Signals:
   [x] Fresh Wallet (fewer than 5 transactions lifetime)
   [x] Niche Market (less than $50k daily volume)
-  [x] Large Position (more than 2% order book impact)
+  [x] Large Position (more than 5% order book impact)
 
 Funding Trail:
   --> 0xdef...789 (2-year-old wallet, 500+ txns)
@@ -369,6 +368,34 @@ ami-cron remove polymarket-newsletter
 
 `ami-cron` injects `AMI_ROOT` and `.boot-linux/bin` onto `PATH` so the
 cron entry resolves `himalaya` / `uv` without a wrapper script.
+
+---
+
+## Roadmap
+
+The following capabilities are on the plan but not yet implemented. They
+were previously listed in "Detection Algorithms" as if they existed — see
+[`docs/CLAIMS-AUDIT.md`](docs/CLAIMS-AUDIT.md) for the receipts.
+
+- **Event Correlation** — cross-reference trading activity with news
+  feeds (RSS / Twitter / press releases) and flag positions opened
+  1–4 hours before related news breaks. Needs a news ingestor and an
+  event-timestamp matcher. Not built.
+- **Backtesting harness + detection metrics** — replay a recorded
+  WebSocket trade stream through the live detector stack and emit
+  precision / recall / PnL-uplift per signal per day. Tracked as
+  Phase C in the implementation plan; provides the ground truth to
+  validate the $35K → $442K anecdote above and to justify any future
+  ML layer.
+- **Sniper cluster persistence** — `SniperDetector` produces
+  `SniperClusterSignal` objects today but doesn't write them to the
+  database, so longer-term cluster trends can't be queried. Phase D
+  adds a `sniper_clusters` table.
+- **ML anomaly model** — the current detector stack is heuristic-only.
+  An ML layer (feature extraction from wallet / market / funding
+  graphs) is marked "ready" in the architecture but not built; the
+  backtesting harness will determine whether adding one is
+  worthwhile.
 
 ---
 
