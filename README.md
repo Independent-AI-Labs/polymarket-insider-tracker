@@ -207,6 +207,36 @@ polymarket-insider-tracker/
 
 ---
 
+## Testing
+
+The detector stack has three test tiers — in order of scope:
+
+| Tier | Path | Purpose |
+|------|------|---------|
+| Unit | `tests/detector/`, `tests/profiler/`, `tests/storage/`, `tests/backtest/` | Pure-function + per-component behaviour. |
+| End-to-end scenarios | `tests/scenarios/` | Each of the 4 README signal categories driven through replay → rollup → `himalaya batch send --dry-run`, with golden HTML snapshots. See [docs/scenario-tests.md](docs/scenario-tests.md). |
+| Mutation + adversarial | `tests/scenarios/test_mutation_guard.py` | Proves each scenario fails when its corresponding detector threshold is nudged; 100-wallet sybil stress; exact-boundary guards. |
+
+```bash
+# Everything
+PATH=$AMI_ROOT/.boot-linux/bin:$PATH uv run pytest -q
+
+# Just the scenarios (includes a himalaya binary gate)
+PATH=$AMI_ROOT/.boot-linux/bin:$PATH uv run pytest tests/scenarios -q
+
+# Scenario suite 20x for flake-sweeping
+PATH=$AMI_ROOT/.boot-linux/bin:$PATH uv run pytest tests/scenarios --count=20 -q
+```
+
+See [docs/newsletter-sections/](docs/newsletter-sections/) for the
+per-section research dossiers each scenario anchors to. The full
+implementation checklist — 122 tasks across 12 phases — lives at
+[docs/IMPLEMENTATION-TODOS.md](docs/IMPLEMENTATION-TODOS.md).
+Operator responses for failure modes are in
+[docs/RUNBOOK.md](docs/RUNBOOK.md).
+
+---
+
 ## Roadmap
 
 ### Phase 1: Core Detection (Current)
