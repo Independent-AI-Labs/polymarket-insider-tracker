@@ -17,8 +17,11 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from polymarket_insider_tracker.storage.models import (
+    AlertDailyRollupModel,
     DetectorMetricsModel,
     FundingTransferModel,
+    SniperClusterMemberModel,
+    SniperClusterModel,
     WalletProfileModel,
     WalletRelationshipModel,
 )
@@ -604,3 +607,202 @@ class DetectorMetricsRepository:
             if model is not None:
                 out[signal] = DetectorMetricsDTO.from_model(model)
         return out
+
+
+@dataclass
+class SniperClusterDTO:
+    """Data transfer object for a persisted sniper cluster."""
+
+    cluster_id: str
+    wallet_addresses: list[str]
+    avg_entry_delta_seconds: int | None
+    confidence: Decimal | None
+    markets_in_common: list[str]
+    detected_at: datetime | None = None
+    id: int | None = None
+
+
+class SniperClusterRepository:
+    """Persist the output of SniperDetector.run_clustering.
+
+    The pipeline schedules a 15-minute tick that calls
+    `SniperDetector.run_clustering()` and forwards each resulting
+    `SniperClusterSignal` here via `insert_cluster`. The weekly
+    newsletter reads `list_since(cutoff)` to populate its "new sniper
+    clusters" section.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def insert_cluster(self, dto: SniperClusterDTO) -> SniperClusterDTO:
+        """Insert a cluster row plus a row per member wallet."""
+        cluster_model = SniperClusterModel(
+            detected_at=dto.detected_at or datetime.now(UTC),
+            cluster_id=dto.cluster_id,
+            wallet_count=len(dto.wallet_addresses),
+            avg_entry_delta_seconds=dto.avg_entry_delta_seconds,
+            confidence=dto.confidence,
+            markets_in_common=list(dto.markets_in_common),
+        )
+        self.session.add(cluster_model)
+        await self.session.flush()
+        for wallet in dto.wallet_addresses:
+            self.session.add(
+                SniperClusterMemberModel(
+                    cluster_row_id=cluster_model.id,
+                    wallet_address=wallet.lower(),
+                )
+            )
+        await self.session.flush()
+        return SniperClusterDTO(
+            id=cluster_model.id,
+            cluster_id=cluster_model.cluster_id,
+            wallet_addresses=[w.lower() for w in dto.wallet_addresses],
+            avg_entry_delta_seconds=cluster_model.avg_entry_delta_seconds,
+            confidence=cluster_model.confidence,
+            markets_in_common=list(cluster_model.markets_in_common),
+            detected_at=cluster_model.detected_at,
+        )
+
+    async def list_since(self, cutoff: datetime) -> list[SniperClusterDTO]:
+        """Return clusters detected at or after `cutoff`."""
+        result = await self.session.execute(
+            select(SniperClusterModel)
+            .where(SniperClusterModel.detected_at >= cutoff)
+            .order_by(SniperClusterModel.detected_at.desc())
+        )
+        clusters = list(result.scalars().all())
+        if not clusters:
+            return []
+
+        ids = [c.id for c in clusters]
+        members_result = await self.session.execute(
+            select(SniperClusterMemberModel).where(
+                SniperClusterMemberModel.cluster_row_id.in_(ids)
+            )
+        )
+        by_cluster: dict[int, list[str]] = {cid: [] for cid in ids}
+        for m in members_result.scalars().all():
+            by_cluster[m.cluster_row_id].append(m.wallet_address)
+
+        return [
+            SniperClusterDTO(
+                id=c.id,
+                cluster_id=c.cluster_id,
+                wallet_addresses=sorted(by_cluster.get(c.id, [])),
+                avg_entry_delta_seconds=c.avg_entry_delta_seconds,
+                confidence=c.confidence,
+                markets_in_common=list(c.markets_in_common),
+                detected_at=c.detected_at,
+            )
+            for c in clusters
+        ]
+
+    async def clusters_for_wallet(self, wallet_address: str) -> list[SniperClusterDTO]:
+        """Return every cluster the given wallet has appeared in."""
+        result = await self.session.execute(
+            select(SniperClusterModel)
+            .join(SniperClusterMemberModel,
+                  SniperClusterMemberModel.cluster_row_id == SniperClusterModel.id)
+            .where(SniperClusterMemberModel.wallet_address == wallet_address.lower())
+            .order_by(SniperClusterModel.detected_at.desc())
+        )
+        clusters = list(result.scalars().all())
+        if not clusters:
+            return []
+        return await self.list_since(min(c.detected_at for c in clusters))
+
+
+@dataclass
+class AlertRollupDTO:
+    """One (day, market, signal) aggregate row."""
+
+    day: datetime
+    market_id: str
+    signal: str
+    alert_count: int
+    unique_wallets: int
+    total_notional: Decimal | None = None
+
+
+class AlertRollupRepository:
+    """Daily-rollup aggregate read by the newsletter builders.
+
+    Writers: `scripts/compute-daily-rollup.py` (cron `5 0 * * *` UTC).
+    Readers: `scripts/newsletters/daily.py` / `weekly.py`.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def upsert(self, dto: AlertRollupDTO) -> AlertRollupDTO:
+        """Insert-or-replace the row for (day, market_id, signal).
+
+        The rollup script runs idempotently — we tolerate re-runs of
+        the same day by overwriting, rather than accumulating.
+        """
+        # Portable upsert: delete existing row, then insert. The
+        # composite primary key guarantees uniqueness.
+        await self.session.execute(
+            delete(AlertDailyRollupModel).where(
+                AlertDailyRollupModel.day == dto.day,
+                AlertDailyRollupModel.market_id == dto.market_id,
+                AlertDailyRollupModel.signal == dto.signal,
+            )
+        )
+        model = AlertDailyRollupModel(
+            day=dto.day,
+            market_id=dto.market_id,
+            signal=dto.signal,
+            alert_count=dto.alert_count,
+            unique_wallets=dto.unique_wallets,
+            total_notional=dto.total_notional,
+        )
+        self.session.add(model)
+        await self.session.flush()
+        return dto
+
+    async def for_day(self, day: datetime) -> list[AlertRollupDTO]:
+        """Return all rows for the given day (one per market × signal)."""
+        result = await self.session.execute(
+            select(AlertDailyRollupModel)
+            .where(AlertDailyRollupModel.day == day)
+            .order_by(AlertDailyRollupModel.alert_count.desc())
+        )
+        return [
+            AlertRollupDTO(
+                day=m.day,
+                market_id=m.market_id,
+                signal=m.signal,
+                alert_count=m.alert_count,
+                unique_wallets=m.unique_wallets,
+                total_notional=m.total_notional,
+            )
+            for m in result.scalars().all()
+        ]
+
+    async def top_markets_for_window(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        limit: int = 10,
+    ) -> list[tuple[str, int]]:
+        """Return `[(market_id, total_alerts)]` over the window, top N.
+
+        Used by the weekly retrospective to rank noisiest markets.
+        """
+        from sqlalchemy import func
+        result = await self.session.execute(
+            select(
+                AlertDailyRollupModel.market_id,
+                func.sum(AlertDailyRollupModel.alert_count).label("total"),
+            )
+            .where(AlertDailyRollupModel.day >= start)
+            .where(AlertDailyRollupModel.day < end)
+            .group_by(AlertDailyRollupModel.market_id)
+            .order_by(func.sum(AlertDailyRollupModel.alert_count).desc())
+            .limit(limit)
+        )
+        return [(row[0], int(row[1] or 0)) for row in result.all()]
