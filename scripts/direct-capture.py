@@ -25,6 +25,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from polymarket_insider_tracker.backtest.replay import trade_event_to_record
+from polymarket_insider_tracker.config import get_settings
 from polymarket_insider_tracker.ingestor.models import TradeEvent
 from polymarket_insider_tracker.ingestor.websocket import TradeStreamHandler
 
@@ -56,7 +57,13 @@ async def run(output_path: Path, duration_seconds: int) -> int:
                 elapsed = (datetime.now(UTC) - started).total_seconds()
                 LOG.info("captured %d events (%.0fs elapsed)", count, elapsed)
 
-        handler = TradeStreamHandler(on_trade=on_trade)
+        # WebSocket host — prefer the env-configured URL so the
+        # capture uses the same endpoint as the main pipeline rather
+        # than the module-level default (which points at a retired
+        # hostname).
+        settings = get_settings()
+        host = settings.polymarket.ws_url
+        handler = TradeStreamHandler(on_trade=on_trade, host=host)
         task = asyncio.create_task(handler.start())
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=duration_seconds)
