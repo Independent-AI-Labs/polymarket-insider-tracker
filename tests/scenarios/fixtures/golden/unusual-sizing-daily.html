@@ -1,0 +1,32 @@
+himalaya-ok email=alice@example.com status=dry-run
+data=- email: alice@example.com
+  name: Alice
+  subject: '[AMI] Polymarket — High-conviction 2026-04-19'
+  report:
+    date: '2026-04-19'
+    generated: 2026-04-19 13:00
+    title: Polymarket — High-conviction positions
+    stats:
+      Size-anomaly alerts: '1'
+    summary_markets:
+    - Question: Will Operation X begin by Friday?
+      24h Vol: $680K
+      Liquidity: $200K
+    sections:
+    - title: Top Markets by 24-Hour Volume
+      market_count: 1
+      markets: []
+    extra_sections: []
+    observations: []
+    config:
+      email:
+        summary_top_n: 5
+        max_observations: 5
+        footer_text: AMI Reports
+        style:
+          font_family: sans-serif
+          max_width: 640px
+          header_bg: '#1a1a2e'
+          header_text: '#ffffff'
+          accent_color: '#aaaaaa'
+
