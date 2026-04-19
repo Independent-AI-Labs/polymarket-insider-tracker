@@ -17,6 +17,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -114,4 +115,34 @@ class WalletRelationshipModel(Base):
         ),
         Index("idx_wallet_relationships_a", "wallet_a"),
         Index("idx_wallet_relationships_b", "wallet_b"),
+    )
+
+
+class DetectorMetricsModel(Base):
+    """SQLAlchemy model for detector-metrics rows.
+
+    One row per (signal, window) written after a backtest replay. The
+    monthly newsletter reads these rows verbatim; the weekly hit/miss
+    retrospective reads the `hits`/`misses` columns.
+    """
+
+    __tablename__ = "detector_metrics"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    signal: Mapped[str] = mapped_column(String(32), nullable=False)
+    alerts_total: Mapped[int] = mapped_column(Integer, nullable=False)
+    hits: Mapped[int] = mapped_column(Integer, nullable=False)
+    misses: Mapped[int] = mapped_column(Integer, nullable=False)
+    pending: Mapped[int] = mapped_column(Integer, nullable=False)
+    precision: Mapped[Decimal | None] = mapped_column(Numeric(5, 4), nullable=True)
+    pnl_uplift_bps: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("idx_detector_metrics_window_signal", "window_start", "signal"),
     )

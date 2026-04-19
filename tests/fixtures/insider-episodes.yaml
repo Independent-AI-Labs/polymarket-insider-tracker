@@ -1,0 +1,36 @@
+# Ground-truth insider episodes for the backtesting harness.
+#
+# Each episode describes a wallet + market that public sources have
+# flagged as likely insider activity, along with the detection window
+# the replay is expected to flag (or miss, depending on detector tuning).
+#
+# This seed list is deliberately small (<= 10). Additions should be
+# backed by a public reference (tweet, blog, news article) and the
+# wallet address + market conditionId recorded verbatim from
+# on-chain / Polymarket API sources.
+#
+# Schema per episode:
+#   slug:              short machine-readable handle
+#   source:            URL of the public attribution
+#   wallet_address:    0x-prefixed lowercase hex
+#   market_id:         Polymarket condition ID (0x...)
+#   market_question:   human-readable market prompt
+#   trade_side:        BUY | SELL
+#   trade_outcome:     the side the insider bet
+#   window_start:      ISO-8601 UTC — earliest captured trade to consider
+#   window_end:        ISO-8601 UTC — replay scoring window ends here
+#   expected_signal:   fresh_wallet | size_anomaly | niche_market | any
+#   notes:             one-line rationale
+
+episodes:
+  - slug: didi-jan03-example
+    source: "https://x.com/DidiTrading (README Opportunity anecdote)"
+    wallet_address: "0x0000000000000000000000000000000000000000"
+    market_id: "0x0000000000000000000000000000000000000000000000000000000000000000"
+    market_question: "Placeholder — the README's $35K -> $442K anecdote. Fill in after capture + research."
+    trade_side: BUY
+    trade_outcome: "YES"
+    window_start: "2026-01-03T00:00:00+00:00"
+    window_end:   "2026-01-10T00:00:00+00:00"
+    expected_signal: any
+    notes: "Seed placeholder — concrete wallet + market to be sourced from @DidiTrading's thread."
