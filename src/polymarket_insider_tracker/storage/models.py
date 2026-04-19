@@ -212,3 +212,125 @@ class AlertDailyRollupModel(Base):
     total_notional: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
 
     __table_args__ = (Index("idx_alert_daily_rollup_day", "day"),)
+
+
+# ---------------------------------------------------------------------------
+# Phase F — public-subscriber registry, delivery ledger, bounces, suppression
+# See `projects/AMI-STREAMS/docs/REQ-MAIL.md` §§ 10, 11, 12 + SPEC-MAIL §10.
+# ---------------------------------------------------------------------------
+
+
+class SubscriberModel(Base):
+    """Public newsletter subscribers.
+
+    States
+    - `pending_opt_in`: signup recorded, confirmation email sent, token
+      not yet clicked.
+    - `active`: clicked the confirmation link. Included in sends matching
+      their `cadences`.
+    - `bounced`: hit REQ-MAIL-115 threshold. Excluded from sends.
+    - `unsubscribed`: one-click or link-click opt-out. Excluded.
+    - `suppressed`: matches a suppression-list entry. Excluded even if
+      explicitly re-subscribed.
+    """
+
+    __tablename__ = "subscribers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(String(320), unique=True, nullable=False)
+    name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Comma-joined cadence tags — split in the repo. Postgres would
+    # ideally use TEXT[] but the test harness uses SQLite, which has
+    # no array type; keeping TEXT keeps both paths identical.
+    cadences: Mapped[str] = mapped_column(Text, nullable=False, default="daily")
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending_opt_in"
+    )
+    opt_in_token: Mapped[str] = mapped_column(String(36), nullable=False)
+    opt_in_confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    unsubscribe_token: Mapped[str] = mapped_column(String(36), nullable=False)
+    bounce_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_bounce_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    __table_args__ = (
+        Index("idx_subscribers_status", "status"),
+        Index("idx_subscribers_opt_in_token", "opt_in_token"),
+        Index("idx_subscribers_unsubscribe_token", "unsubscribe_token"),
+    )
+
+
+class EmailDeliveryModel(Base):
+    """Append-only record of every send attempt (REQ-MAIL-130)."""
+
+    __tablename__ = "email_deliveries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    edition_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    cadence: Mapped[str] = mapped_column(String(32), nullable=False)
+    subscriber_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    message_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    relay_response: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # sent | failed | suppressed | dry-run
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    queued_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        Index("idx_email_deliveries_edition", "edition_id"),
+        Index("idx_email_deliveries_subscriber", "subscriber_id"),
+        Index("idx_email_deliveries_message_id", "message_id"),
+    )
+
+
+class EmailBounceModel(Base):
+    """DSN parsed back from the relay (REQ-MAIL-131)."""
+
+    __tablename__ = "email_bounces"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    delivery_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    bounce_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    diagnostic: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reported_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+    __table_args__ = (Index("idx_email_bounces_email", "email"),)
+
+
+class SuppressionEntryModel(Base):
+    """Override any opt-in; consulted at data-file-build time (REQ-MAIL-116)."""
+
+    __tablename__ = "suppression_list"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    pattern: Mapped[str] = mapped_column(String(512), nullable=False)
+    # exact | domain | regex
+    pattern_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+    __table_args__ = (
+        UniqueConstraint("pattern", "pattern_type", name="uq_suppression_pattern"),
+    )
