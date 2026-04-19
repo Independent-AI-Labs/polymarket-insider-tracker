@@ -639,6 +639,37 @@ Three gaps surfaced by `docs/SPEC-MAIL-CONFORMANCE.md`.
 
 ---
 
+## Phase 14 — CLOB wallet attribution
+
+Surfaced by `docs/WS-SUBSCRIPTION-BUG.md`. The CLOB `/ws/market`
+channel is the only WS endpoint reachable here but it doesn't
+expose the proxy wallet per trade. Insider-tracking detectors
+need that wallet. Strategy: correlate each `last_trade_price`
+frame against the Polygon on-chain log stream (CTFExchange fills)
+and attach the recovered proxy wallet before the pipeline hands
+the trade to the detector stack.
+
+### 14.1 On-chain correlation glue
+
+- [ ] **14.1.1** In `chain_indexer`, expose a
+  `recent_fills_by_market(market_id, since_ts)` lookup indexed by
+  `(market_id, price_tick, size_rounded)`.
+  DoD: unit test seeds 3 synthetic fills and retrieves by
+  (market, ±30s window).
+- [ ] **14.1.2** Pipeline wraps each CLOB `TradeEvent` in a
+  resolver step that calls `recent_fills_by_market` and fills the
+  `wallet_address` field. Miss-rate (no match within 30s) logged
+  as a histogram; target ≤ 5 %.
+  DoD: scenario test feeds a canned CLOB trade + matching
+  synthetic fill and asserts `wallet_address` is populated.
+- [ ] **14.1.3** Add a `--wallet-attribution` CLI flag to
+  `scripts/direct-capture.py` that enables the correlation step so
+  offline captures also carry wallets (for backtest replay).
+  DoD: 1-minute live capture with the flag populates
+  `wallet_address` on > 90 % of rows.
+
+---
+
 ## Out of scope (explicit non-todos)
 
 - Any ML model training or adoption — out of scope until we have
