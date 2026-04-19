@@ -250,47 +250,47 @@ Numbering is `P.S.T` = Phase · Section · Task.
 
 ### 5.1 Design
 
-- [ ] **5.1.1** Write `docs/newsletter-sections/04-funding-chains-design.md`
+- [x] **5.1.1** Write `docs/newsletter-sections/04-funding-chains-design.md`
   (appendix) with the cluster-detection algorithm: "two wallets
   share origin" defined as "their 1- or 2-hop USDC funding path
   converges on the same `from_address` within a 48-hour window".
-- [ ] **5.1.2** Confidence score formula: `0.5 + 0.15 × hop_overlap
+- [x] **5.1.2** Confidence score formula: `0.5 + 0.15 × hop_overlap
   + 0.05 × simultaneity_bonus` capped at 0.95. Documented inline.
-- [ ] **5.1.3** Decision: write relationships on every
+- [x] **5.1.3** Decision: write relationships on every
   `FundingTracer.trace()` call? Too chatty → batched in the
   15-minute pipeline tick. Record the choice.
 
 ### 5.2 Implementation
 
-- [ ] **5.2.1** Add `RelationshipRepository.upsert(dto)` with the
+- [x] **5.2.1** Add `RelationshipRepository.upsert(dto)` with the
   portable insert-or-ignore (same pattern as
   `AlertRollupRepository.upsert`).
-- [ ] **5.2.2** Add `FundingGraph` helper in
+- [x] **5.2.2** Add `FundingGraph` helper in
   `profiler/funding.py`:
   - `async def collect_shared_origins(wallets: list[str], window_hours=48) ->
       dict[str, list[str]]` returning origin → funded-wallets.
-- [ ] **5.2.3** Wire `FundingGraph` into `Pipeline` as a 15-minute
+- [~] **5.2.3** *(shipped as standalone scripts/compute-funding-clusters.py; pipeline tick integration deferred)* Wire `FundingGraph` into `Pipeline` as a 15-minute
   tick producer; each returned cluster writes N·(N−1)/2
   relationship rows with `type='shared_origin'`.
-- [ ] **5.2.4** Add `RelationshipRepository.clusters_for_origin(origin, days)
+- [x] **5.2.4** Add `RelationshipRepository.clusters_for_origin(origin, days)
   -> list[ClusterDTO]` query.
 
 ### 5.3 Tests
 
-- [ ] **5.3.1** Unit tests for `collect_shared_origins` — hop
+- [x] **5.3.1** Unit tests for `collect_shared_origins` — hop
   overlap, time window boundary, entity-registered origin
   (Binance) treated specially.
-- [ ] **5.3.2** Unit tests for `upsert` dedup: re-running against
+- [x] **5.3.2** Unit tests for `upsert` dedup: re-running against
   the same input doesn't duplicate rows.
-- [ ] **5.3.3** Unit tests for `clusters_for_origin`: returns
+- [x] **5.3.3** Unit tests for `clusters_for_origin`: returns
   empty, singleton, multi-wallet clusters.
 
 ### 5.4 Migration / Back-compat
 
-- [ ] **5.4.1** No migration needed (`wallet_relationships` table
+- [x] **5.4.1** No migration needed (`wallet_relationships` table
   exists since the initial schema); confirm
   `alembic upgrade head` from a clean DB still works.
-- [ ] **5.4.2** If the current pipeline tick doesn't exist, add
+- [x] **5.4.2** If the current pipeline tick doesn't exist, add
   a new `scripts/compute-funding-clusters.py` cron
   (`*/15 * * * *`) and document in README alongside the other
   cron recipes.
@@ -301,40 +301,40 @@ Numbering is `P.S.T` = Phase · Section · Task.
 
 ### 6.1 Fixture design
 
-- [ ] **6.1.1** 4 fresh wallets at varying ages (2h, 4h, 18h, 30h),
+- [x] **6.1.1** 4 fresh wallets at varying ages (2h, 4h, 18h, 30h),
   each trading into the same 2 markets within a 3-hour window.
   Each wallet's notional > $1,000.
-- [ ] **6.1.2** `funding_transfers` pre-seeded: all 4 wallets
+- [x] **6.1.2** `funding_transfers` pre-seeded: all 4 wallets
   received USDC from `0xf977814e90da44bfa03b6295a0616a897441acec`
   (Binance 20 hot wallet) within 6 hours of each other.
-- [ ] **6.1.3** Control: a 5th fresh wallet funded from an
+- [x] **6.1.3** Control: a 5th fresh wallet funded from an
   unrelated EOA (not a known entity) — should NOT appear in the
   cluster.
 
 ### 6.2 Assertions
 
-- [ ] **6.2.1** All 4 real wallets fire `fresh_wallet`; the 5th
+- [x] **6.2.1** All 4 real wallets fire `fresh_wallet`; the 5th
   does too but is excluded from the cluster.
-- [ ] **6.2.2** `wallet_relationships` rows present: 6 pairwise
+- [x] **6.2.2** `wallet_relationships` rows present: 6 pairwise
   `shared_origin` edges (4C2) with confidence in [0.5, 0.95].
-- [ ] **6.2.3** `clusters_for_origin(binance20, 2)` returns exactly
+- [x] **6.2.3** `clusters_for_origin(binance20, 2)` returns exactly
   4 wallets.
-- [ ] **6.2.4** Weekly newsletter HTML contains:
+- [x] **6.2.4** Weekly newsletter HTML contains:
   `"4 wallets funded in 48h"`,
   `"Binance"` (rendered via `EntityRegistry.classify`),
   and the aggregate notional.
 
 ### 6.3 Golden file
 
-- [ ] **6.3.1** `tests/scenarios/fixtures/golden/funding-cluster-weekly.html`.
+- [x] **6.3.1** `tests/scenarios/fixtures/golden/funding-cluster-weekly.html`.
 
 ### 6.4 Negative controls
 
-- [ ] **6.4.1** Reduce cluster to 1 wallet → no cluster row in the
+- [x] **6.4.1** Reduce cluster to 1 wallet → no cluster row in the
   newsletter.
-- [ ] **6.4.2** Move transfers outside the 48h window → cluster
+- [x] **6.4.2** Move transfers outside the 48h window → cluster
   rows dropped.
-- [ ] **6.4.3** Replace Binance 20 with an unknown contract →
+- [~] **6.4.3** *(deferred: covered implicitly by test_cluster_written_and_queryable's OUTSIDER branch)* Replace Binance 20 with an unknown contract →
   cluster still detected (shared origin), but the newsletter label
   says "unknown contract" instead of "Binance".
 

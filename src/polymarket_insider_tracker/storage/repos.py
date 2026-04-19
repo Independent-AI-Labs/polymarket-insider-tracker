@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -500,6 +500,59 @@ class RelationshipRepository:
 
         await self.session.flush()
         return dto
+
+    async def clusters_for_origin(
+        self,
+        origin_address: str,
+        *,
+        days: int = 30,
+        relationship_type: str = "shared_origin",
+    ) -> list[str]:
+        """Return the set of wallet addresses linked via a common origin.
+
+        Walks `wallet_relationships` rows of the given `relationship_type`
+        where one side matches a wallet that `funding_transfers` shows
+        received USDC from `origin_address` in the last `days` days.
+        Returns the de-duplicated set of funded wallets — exactly the
+        shape the weekly newsletter's "Entity-linked clusters" section
+        iterates over.
+        """
+        cutoff = datetime.now(UTC) - timedelta(days=days)
+        origin_norm = origin_address.lower()
+        funded_stmt = (
+            select(FundingTransferModel.to_address)
+            .where(FundingTransferModel.from_address == origin_norm)
+            .where(FundingTransferModel.timestamp >= cutoff)
+        )
+        result = await self.session.execute(funded_stmt)
+        funded = {row[0] for row in result.all()}
+        if len(funded) < 2:
+            # A single funded wallet is not a cluster — operators
+            # care about coordinated behaviour, not singletons.
+            return sorted(funded)
+        # Only return wallets that are connected via the declared
+        # relationship rows (i.e. the writer already confirmed them
+        # as a cluster). This is the audit trail the newsletter
+        # surfaces.
+        rel_stmt = (
+            select(
+                WalletRelationshipModel.wallet_a,
+                WalletRelationshipModel.wallet_b,
+            )
+            .where(WalletRelationshipModel.relationship_type == relationship_type)
+            .where(
+                WalletRelationshipModel.wallet_a.in_(funded)
+                | WalletRelationshipModel.wallet_b.in_(funded)
+            )
+        )
+        rel_result = await self.session.execute(rel_stmt)
+        cluster: set[str] = set()
+        for a, b in rel_result.all():
+            if a in funded:
+                cluster.add(a)
+            if b in funded:
+                cluster.add(b)
+        return sorted(cluster)
 
     async def delete(self, wallet_a: str, wallet_b: str, relationship_type: str) -> bool:
         """Delete a specific relationship.
