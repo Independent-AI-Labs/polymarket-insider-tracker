@@ -13,6 +13,9 @@ from websockets.asyncio.client import ClientConnection
 from websockets.asyncio.client import connect as ws_connect
 from websockets.exceptions import ConnectionClosed
 
+from datetime import UTC, datetime
+from decimal import Decimal
+
 from polymarket_insider_tracker.ingestor.models import TradeEvent
 
 logger = logging.getLogger(__name__)
@@ -31,6 +34,20 @@ class ConnectionState(Enum):
     CONNECTING = "connecting"
     CONNECTED = "connected"
     RECONNECTING = "reconnecting"
+
+
+class SubscriptionMode(str, Enum):
+    """Wire-protocol variants the handler speaks.
+
+    ACTIVITY targets the legacy `ws-live-data.polymarket.com` public feed
+    (`{"topic":"activity","type":"trades"}` subscribe, one message per
+    trade). CLOB_MARKET targets `ws-subscriptions-clob.polymarket.com/ws/market`
+    (`{"assets_ids":[...],"type":"market"}` subscribe, `last_trade_price`
+    events — the CLOB's per-asset equivalent of a trade frame).
+    """
+
+    ACTIVITY = "activity"
+    CLOB_MARKET = "clob_market"
 
 
 @dataclass
@@ -86,6 +103,9 @@ class TradeStreamHandler:
         initial_reconnect_delay: int = DEFAULT_INITIAL_RECONNECT_DELAY,
         event_filter: str | None = None,
         market_filter: str | None = None,
+        mode: SubscriptionMode | None = None,
+        asset_ids: list[str] | None = None,
+        asset_id_to_condition: dict[str, str] | None = None,
     ) -> None:
         """Initialize the trade stream handler.
 
@@ -98,6 +118,17 @@ class TradeStreamHandler:
             initial_reconnect_delay: Initial delay for reconnection backoff.
             event_filter: Optional event slug to filter trades by event.
             market_filter: Optional market slug to filter trades by market.
+            mode: Wire-protocol mode. Defaults to CLOB_MARKET when the host
+                path contains `/ws/market`, otherwise ACTIVITY.
+            asset_ids: For CLOB_MARKET mode, the ERC1155 token IDs to
+                subscribe to. Polymarket's market channel only streams
+                frames for explicitly requested assets.
+            asset_id_to_condition: For CLOB_MARKET mode, a mapping from
+                asset_id to its `conditionId` and human-readable metadata.
+                Each value is a dict carrying at least `condition_id`,
+                `market_slug`, `event_slug`, `outcome`. `last_trade_price`
+                frames only carry `asset_id` + `market` (= conditionId),
+                so this lookup fills the rest of the TradeEvent.
         """
         self._on_trade = on_trade
         self._on_state_change = on_state_change
@@ -107,6 +138,13 @@ class TradeStreamHandler:
         self._initial_reconnect_delay = initial_reconnect_delay
         self._event_filter = event_filter
         self._market_filter = market_filter
+        self._mode = mode or (
+            SubscriptionMode.CLOB_MARKET
+            if "/ws/market" in host
+            else SubscriptionMode.ACTIVITY
+        )
+        self._asset_ids = list(asset_ids or [])
+        self._asset_meta: dict[str, dict[str, str]] = dict(asset_id_to_condition or {})
 
         self._state = ConnectionState.DISCONNECTED
         self._stats = StreamStats()
@@ -138,7 +176,16 @@ class TradeStreamHandler:
                     logger.error("Error in state change callback: %s", e)
 
     def _build_subscription_message(self) -> dict[str, Any]:
-        """Build the WebSocket subscription message."""
+        """Build the WebSocket subscription message.
+
+        Shape depends on `self._mode`. See `SubscriptionMode`.
+        """
+        if self._mode is SubscriptionMode.CLOB_MARKET:
+            # The CLOB market channel subscribe is a single flat object,
+            # NOT wrapped in a `subscriptions` list. See
+            # docs.polymarket.com/developers/CLOB/websocket/wss-channels.
+            return {"assets_ids": list(self._asset_ids), "type": "market"}
+
         subscription: dict[str, Any] = {
             "topic": "activity",
             "type": "trades",
@@ -183,38 +230,108 @@ class TradeStreamHandler:
         try:
             data = json.loads(message)
 
-            # Check if this is a trade message
-            topic = data.get("topic")
-            msg_type = data.get("type")
-
-            if topic == "activity" and msg_type == "trades":
-                payload = data.get("payload", {})
-                trade = TradeEvent.from_websocket_message(payload)
-
-                self._stats.trades_received += 1
-                self._stats.last_trade_time = time.time()
-
-                logger.debug(
-                    "Trade: %s %s @ %s on %s",
-                    trade.side,
-                    trade.size,
-                    trade.price,
-                    trade.market_slug,
-                )
-
-                try:
-                    await self._on_trade(trade)
-                except Exception as e:
-                    logger.error("Error in trade callback: %s", e)
-
-            else:
-                # Log other message types for debugging
-                logger.debug("Received message: topic=%s type=%s", topic, msg_type)
+            # CLOB market channel frames arrive as either a single
+            # dict or a list of dicts (initial `book` snapshot for each
+            # subscribed asset typically ships as a list).
+            frames = data if isinstance(data, list) else [data]
+            for frame in frames:
+                if not isinstance(frame, dict):
+                    continue
+                if self._mode is SubscriptionMode.CLOB_MARKET:
+                    await self._handle_clob_frame(frame)
+                else:
+                    await self._handle_activity_frame(frame)
 
         except json.JSONDecodeError as e:
             logger.warning("Invalid JSON message: %s", e)
         except Exception as e:
             logger.error("Error processing message: %s", e)
+
+    async def _handle_activity_frame(self, data: dict[str, Any]) -> None:
+        """Parse a legacy `topic: activity, type: trades` frame."""
+        topic = data.get("topic")
+        msg_type = data.get("type")
+
+        if topic == "activity" and msg_type == "trades":
+            payload = data.get("payload", {})
+            trade = TradeEvent.from_websocket_message(payload)
+
+            self._stats.trades_received += 1
+            self._stats.last_trade_time = time.time()
+
+            logger.debug(
+                "Trade: %s %s @ %s on %s",
+                trade.side,
+                trade.size,
+                trade.price,
+                trade.market_slug,
+            )
+
+            try:
+                await self._on_trade(trade)
+            except Exception as e:
+                logger.error("Error in trade callback: %s", e)
+        else:
+            logger.debug("Received message: topic=%s type=%s", topic, msg_type)
+
+    async def _handle_clob_frame(self, data: dict[str, Any]) -> None:
+        """Parse a CLOB market-channel frame.
+
+        Only `last_trade_price` events correspond to trade executions and
+        become `TradeEvent`s. `book` and `price_change` frames are
+        book-state deltas; we log them at DEBUG and move on.
+        """
+        event_type = data.get("event_type")
+        if event_type != "last_trade_price":
+            logger.debug("CLOB non-trade frame: event_type=%s", event_type)
+            return
+
+        asset_id = str(data.get("asset_id", ""))
+        meta = self._asset_meta.get(asset_id, {})
+        condition_id = str(data.get("market") or meta.get("condition_id", ""))
+
+        # CLOB timestamps are UNIX milliseconds as strings.
+        ts_raw = data.get("timestamp", 0)
+        try:
+            ts_ms = int(ts_raw)
+            timestamp = datetime.fromtimestamp(ts_ms / 1000, tz=UTC)
+        except (TypeError, ValueError):
+            timestamp = datetime.now(UTC)
+
+        side_raw = str(data.get("side", "BUY")).upper()
+        side_literal = "BUY" if side_raw == "BUY" else "SELL"
+
+        trade = TradeEvent(
+            market_id=condition_id,
+            trade_id=str(data.get("fee_rate_bps") or "") + ":" + str(ts_raw),
+            wallet_address="",  # Not exposed on the public market channel.
+            side=side_literal,  # type: ignore[arg-type]
+            outcome=meta.get("outcome", ""),
+            outcome_index=int(meta.get("outcome_index", 0) or 0),
+            price=Decimal(str(data.get("price", 0))),
+            size=Decimal(str(data.get("size", 0))),
+            timestamp=timestamp,
+            asset_id=asset_id,
+            market_slug=meta.get("market_slug", ""),
+            event_slug=meta.get("event_slug", ""),
+            event_title=meta.get("event_title", ""),
+        )
+
+        self._stats.trades_received += 1
+        self._stats.last_trade_time = time.time()
+
+        logger.debug(
+            "CLOB trade: %s %s @ %s on %s",
+            trade.side,
+            trade.size,
+            trade.price,
+            trade.market_slug or asset_id[:10],
+        )
+
+        try:
+            await self._on_trade(trade)
+        except Exception as e:
+            logger.error("Error in trade callback: %s", e)
 
     async def _listen(self, ws: ClientConnection) -> None:
         """Listen for messages on the WebSocket."""

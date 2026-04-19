@@ -1,68 +1,95 @@
-# Polymarket WebSocket — zero-trade subscription bug
+# Polymarket WebSocket — CLOB subscription protocol
 
-**Status:** open
-**Discovered:** 2026-04-19 live capture attempt
-**Repro:**
+**Status:** resolved for the CLOB market channel; follow-up open on
+wallet attribution.
+**Discovered:** 2026-04-19 live capture attempt.
+**Resolved:** 2026-04-19 same-day — `TradeStreamHandler` now speaks
+the CLOB `/ws/market` protocol; a 90-second capture landed 130
+trades across 28 markets.
 
-```bash
-POLYMARKET_API_KEY=... POLYMARKET_API_SECRET=... POLYMARKET_API_PASSPHRASE=... \
-  uv run python scripts/direct-capture.py --duration 120
-# Log: "Connected … and subscribed to trades"
-# But file stays at 0 lines.
-```
+## What was wrong
 
-## What's happening
-
-`src/polymarket_insider_tracker/ingestor/websocket.py:140-153`
-sends the subscription payload:
+`src/polymarket_insider_tracker/ingestor/websocket.py` originally
+sent the legacy activity-feed subscribe for every host:
 
 ```python
-{
-    "subscriptions": [
-        {"topic": "activity", "type": "trades"}
-    ]
-}
+{"subscriptions": [{"topic": "activity", "type": "trades"}]}
 ```
 
-The TCP + TLS handshake completes, the WebSocket server accepts
-the subscribe, but no `topic: "activity"` messages ever arrive.
-Either:
+That payload is correct for `wss://ws-live-data.polymarket.com`, but
+this environment has that hostname pinned to 127.0.0.1 at the
+resolver layer (confirmed via `resolvectl query`). The only
+Polymarket websocket reachable here is
+`wss://ws-subscriptions-clob.polymarket.com/ws/market` (pinned in
+`/etc/hosts` to `104.18.34.205`), and that endpoint wants a
+different shape:
 
-1. The CLOB endpoint (`wss://ws-subscriptions-clob.polymarket.com/ws/market`)
-   no longer honours the `topic: activity` protocol this code
-   targets — Polymarket may have split market-data and activity
-   into separate endpoints.
-2. The subscribe payload needs an `assets_ids` or `markets` filter
-   for the server to start streaming.
-3. The user channel (`ws/user`) is where trade executions live
-   now; `ws/market` is book-update-only.
+```python
+{"assets_ids": ["<token_id>", ...], "type": "market"}
+```
 
-## What the CI + scenario tests already cover
+— a **flat** object, no `subscriptions` wrapper, and the server
+only streams frames for asset IDs the client explicitly lists.
 
-- `tests/ingestor/test_websocket.py`: 18 tests against a mocked
-  in-process WS server. All pass, confirming the client handles
-  the legacy protocol shape correctly.
-- `tests/backtest/test_backtest_cli.py`: end-to-end replay CLI
-  against a synthetic 3-trade capture lands
-  `detector_metrics` rows in SQLite. Passes today.
+## Fix
 
-So the scaffolding works; the only gap is the *live* subscription
-format.
+1. `TradeStreamHandler` gained a `SubscriptionMode` enum
+   (`ACTIVITY | CLOB_MARKET`). The mode auto-detects from the host
+   (`/ws/market` path → CLOB_MARKET) and can be overridden.
+2. `_build_subscription_message` emits the right shape per mode.
+3. `_handle_message` parses both `topic:activity/trades` frames and
+   CLOB `event_type:last_trade_price` frames into `TradeEvent`s.
+   Array-batched frames (the initial `book` snapshot ships as a list
+   of per-asset dicts) are unpacked.
+4. `scripts/direct-capture.py` now fetches the top-N active markets
+   from `gamma-api.polymarket.com`, extracts `clobTokenIds`, and
+   passes `asset_ids` + a metadata lookup table into the handler so
+   `last_trade_price` frames (which only carry `asset_id` + `market`)
+   can still produce fully-populated `TradeEvent`s.
 
-## Next step
+Tests: `tests/ingestor/test_websocket.py::TestCLOBSubscriptionMode`
+exercises mode autodetect, both subscribe shapes, the `last_trade_price`
+→ `TradeEvent` path, book-frame suppression, and array-batched
+unpacking.
 
-- Open an issue tagged `ingestor`. Assignee needs to:
-  1. Reproduce with `websocat` or a small test harness to confirm
-     which URL + payload produces trade frames.
-  2. Update `TradeStreamHandler._build_subscription_message` (and
-     `DEFAULT_WS_HOST` if the endpoint moved).
-  3. Add an integration test using the real endpoint in a
-     feature-gated CI job (skipped by default, opt-in via
-     `POLYMARKET_LIVE_TESTS=1`).
+Live smoke — top 50 markets by 24h volume, 90s:
+
+```
+captured 130 events to data/captures/clob-smoke.jsonl
+unique markets: 28
+```
+
+## Open follow-up — wallet attribution
+
+The CLOB `/ws/market` channel is anonymized. `last_trade_price`
+frames expose `asset_id`, `market` (= conditionId), `side`, `price`,
+`size`, and `timestamp` — **not** the proxy wallet. The legacy
+activity feed did expose `proxyWallet`, which the insider-tracking
+detectors rely on (`FreshWalletDetector`, `SizeAnomalyDetector`,
+`FundingTracer` clustering).
+
+Options, in priority order:
+
+1. **Polygon-chain correlation (preferred).** Each CLOB trade hits
+   the Polygon CTF exchange on-chain within a block or two. A tight
+   loop in `ChainIndexer` can match (market_id, size, price,
+   timestamp±30s) against the on-chain log stream to recover the
+   proxy wallet. This turns the CLOB feed into a partial-information
+   signal that the chain-indexer closes the loop on.
+2. **Authenticated `/ws/user` channel.** Only streams the
+   authenticated user's own trades. Not useful for a public
+   insider-tracker surface, only for dogfooding.
+3. **Bypass the resolver hijack of `ws-live-data.polymarket.com`.**
+   Requires operator-level access to the DNS layer, which is outside
+   the scope of a code fix.
+
+Option 1 is the right path. Tracked as a new task in
+`IMPLEMENTATION-TODOS.md`.
 
 ## Related tasks
 
-- `docs/IMPLEMENTATION-TODOS.md` Phase 9.1.1-9.3.2: these stay
-  open-with-reason. Once the subscription protocol is fixed, the
-  72-hour capture can proceed and the sanity-band CI check (9.2.4)
-  will have real data to score against.
+`docs/IMPLEMENTATION-TODOS.md` Phase 9.1.1 (72-hour capture) is now
+unblocked modulo the wallet-attribution follow-up — the capture
+itself runs and persists trades; pairing them back to wallets
+happens inside the pipeline's chain indexer, not inside the
+WebSocket layer.

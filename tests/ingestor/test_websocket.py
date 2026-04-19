@@ -11,6 +11,7 @@ from polymarket_insider_tracker.ingestor.models import TradeEvent
 from polymarket_insider_tracker.ingestor.websocket import (
     ConnectionState,
     StreamStats,
+    SubscriptionMode,
     TradeStreamHandler,
 )
 
@@ -351,3 +352,146 @@ class TestTradeStreamHandlerIntegration:
         assert received_trades[0].market_id == "0xtest"
         assert received_trades[0].side == "BUY"
         assert received_trades[0].price == Decimal("0.75")
+
+
+class TestCLOBSubscriptionMode:
+    """Tests for the CLOB market-channel subscription variant."""
+
+    def test_mode_autodetects_from_host_path(self) -> None:
+        """Host containing /ws/market switches the mode to CLOB_MARKET."""
+        handler = TradeStreamHandler(
+            on_trade=AsyncMock(),
+            host="wss://ws-subscriptions-clob.polymarket.com/ws/market",
+            asset_ids=["tok-a"],
+        )
+        assert handler._mode is SubscriptionMode.CLOB_MARKET
+
+    def test_mode_defaults_to_activity_for_root_host(self) -> None:
+        """A bare host with no `/ws/market` stays on the activity protocol."""
+        handler = TradeStreamHandler(
+            on_trade=AsyncMock(),
+            host="wss://ws-live-data.polymarket.com",
+        )
+        assert handler._mode is SubscriptionMode.ACTIVITY
+
+    def test_build_subscription_message_clob_mode(self) -> None:
+        """CLOB subscribe is a flat `{assets_ids, type}` object, not wrapped."""
+        handler = TradeStreamHandler(
+            on_trade=AsyncMock(),
+            host="wss://ws-subscriptions-clob.polymarket.com/ws/market",
+            asset_ids=["tok-a", "tok-b"],
+        )
+        msg = handler._build_subscription_message()
+        assert msg == {"assets_ids": ["tok-a", "tok-b"], "type": "market"}
+        # No `subscriptions` wrapper — CLOB differs from the activity feed.
+        assert "subscriptions" not in msg
+
+    @pytest.mark.asyncio
+    async def test_handle_clob_last_trade_price_event(self) -> None:
+        """A last_trade_price frame becomes a TradeEvent with correct fields."""
+        received: list[TradeEvent] = []
+
+        async def on_trade(event: TradeEvent) -> None:
+            received.append(event)
+
+        handler = TradeStreamHandler(
+            on_trade=on_trade,
+            host="wss://ws-subscriptions-clob.polymarket.com/ws/market",
+            asset_ids=["tok-a"],
+            asset_id_to_condition={
+                "tok-a": {
+                    "condition_id": "0xcond",
+                    "market_slug": "will-x-happen",
+                    "event_slug": "x-event",
+                    "event_title": "Will X happen?",
+                    "outcome": "Yes",
+                    "outcome_index": "0",
+                }
+            },
+        )
+
+        frame = json.dumps(
+            {
+                "event_type": "last_trade_price",
+                "asset_id": "tok-a",
+                "market": "0xcond",
+                "price": "0.52",
+                "side": "SELL",
+                "size": "120",
+                "timestamp": "1712345678901",  # ms
+                "fee_rate_bps": "0",
+            }
+        )
+        await handler._handle_message(frame)
+
+        assert len(received) == 1
+        trade = received[0]
+        assert trade.market_id == "0xcond"
+        assert trade.asset_id == "tok-a"
+        assert trade.side == "SELL"
+        assert trade.price == Decimal("0.52")
+        assert trade.size == Decimal("120")
+        assert trade.market_slug == "will-x-happen"
+        assert trade.event_title == "Will X happen?"
+        assert trade.outcome == "Yes"
+        # Timestamp parsed from ms, tz-aware, within 1s of 2024-04-05T17:34:38Z.
+        assert trade.timestamp.tzinfo is not None
+        assert trade.timestamp.year == 2024
+        assert handler.stats.trades_received == 1
+
+    @pytest.mark.asyncio
+    async def test_handle_clob_book_frame_ignored(self) -> None:
+        """book / price_change frames don't fire the trade callback."""
+        received: list[TradeEvent] = []
+
+        async def on_trade(event: TradeEvent) -> None:
+            received.append(event)
+
+        handler = TradeStreamHandler(
+            on_trade=on_trade,
+            host="wss://ws-subscriptions-clob.polymarket.com/ws/market",
+            asset_ids=["tok-a"],
+        )
+        book_frame = json.dumps(
+            {
+                "event_type": "book",
+                "asset_id": "tok-a",
+                "bids": [],
+                "asks": [],
+            }
+        )
+        await handler._handle_message(book_frame)
+        assert received == []
+        assert handler.stats.trades_received == 0
+
+    @pytest.mark.asyncio
+    async def test_handle_clob_array_batched_frames(self) -> None:
+        """Polymarket batches initial CLOB frames as a JSON array — unpack it."""
+        received: list[TradeEvent] = []
+
+        async def on_trade(event: TradeEvent) -> None:
+            received.append(event)
+
+        handler = TradeStreamHandler(
+            on_trade=on_trade,
+            host="wss://ws-subscriptions-clob.polymarket.com/ws/market",
+            asset_ids=["tok-a"],
+            asset_id_to_condition={"tok-a": {"condition_id": "0xc"}},
+        )
+        batch = json.dumps(
+            [
+                {"event_type": "book", "asset_id": "tok-a"},
+                {
+                    "event_type": "last_trade_price",
+                    "asset_id": "tok-a",
+                    "market": "0xc",
+                    "price": "0.31",
+                    "side": "BUY",
+                    "size": "5",
+                    "timestamp": "1712345678901",
+                },
+            ]
+        )
+        await handler._handle_message(batch)
+        assert len(received) == 1
+        assert received[0].price == Decimal("0.31")
