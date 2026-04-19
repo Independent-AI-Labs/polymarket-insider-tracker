@@ -1,0 +1,130 @@
+name: Nightly snapshot canary
+
+# Once a day, regenerate the daily Polymarket market-snapshot report
+# and open a PR containing the fresh markdown + PDF. The PR is NOT
+# meant to be merged — it's a drift-detection surface:
+#
+# - If the Gamma API response shape changes, the PR diff shows it.
+# - If wkhtmltopdf or the Tera template breaks, the PR fails to
+#   produce artifacts and the job fails loudly.
+# - If we go several days with no meaningful change in the snapshot,
+#   something upstream has probably stalled — the PR body
+#   highlights the delta vs. yesterday.
+#
+# The workflow is append-only: each night opens a NEW PR from a
+# dated branch so old deltas stay reviewable. Operators close PRs
+# after a week's retention; no auto-merge.
+
+on:
+  schedule:
+    # 14:00 UTC — one hour after the daily newsletter's send window
+    # so the underlying Gamma API data has settled.
+    - cron: "0 14 * * *"
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Snapshot date (YYYY-MM-DD). Defaults to today."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history so the PR branch can be pushed
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Install wkhtmltopdf (for PDF engine)
+        run: sudo apt-get update && sudo apt-get install -y wkhtmltopdf pandoc
+
+      - name: Determine snapshot date
+        id: date
+        run: |
+          if [[ -n "${{ github.event.inputs.date }}" ]]; then
+            echo "snapshot_date=${{ github.event.inputs.date }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "snapshot_date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate snapshot (no send)
+        env:
+          SNAPSHOT_DATE: ${{ steps.date.outputs.snapshot_date }}
+        run: |
+          set -eux
+          python scripts/send-report.py --no-send --date "$SNAPSHOT_DATE"
+          ls -la reports/
+
+      - name: Check for snapshot artifacts
+        id: artifacts
+        run: |
+          set -eu
+          date="${{ steps.date.outputs.snapshot_date }}"
+          md="reports/market-snapshot-${date}.md"
+          pdf="reports/market-snapshot-${date}.pdf"
+          if [[ ! -s "$md" ]]; then
+            echo "::error::Markdown report not produced at $md"
+            exit 1
+          fi
+          echo "md=$md" >> "$GITHUB_OUTPUT"
+          echo "pdf=$pdf" >> "$GITHUB_OUTPUT"
+
+      - name: Create nightly branch and commit artifacts
+        env:
+          SNAPSHOT_DATE: ${{ steps.date.outputs.snapshot_date }}
+          MD: ${{ steps.artifacts.outputs.md }}
+          PDF: ${{ steps.artifacts.outputs.pdf }}
+        run: |
+          set -eux
+          branch="nightly-snapshot/${SNAPSHOT_DATE}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          # Track snapshot artifacts on this branch only — main still
+          # gitignores reports/.
+          git add -f "$MD"
+          if [[ -f "$PDF" ]]; then git add -f "$PDF"; fi
+          git commit -m "snapshot: ${SNAPSHOT_DATE} drift canary"
+          git push -u origin "$branch"
+
+      - name: Open canary PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SNAPSHOT_DATE: ${{ steps.date.outputs.snapshot_date }}
+        run: |
+          set -eux
+          branch="nightly-snapshot/${SNAPSHOT_DATE}"
+          title="nightly-snapshot: ${SNAPSHOT_DATE}"
+          body=$(cat <<EOF
+          Automated drift-detection snapshot for ${SNAPSHOT_DATE}.
+
+          **Do not merge.** This PR exists so the daily delta against the
+          previous snapshot is reviewable. Close after review; the next
+          nightly run opens a fresh PR from its own dated branch.
+
+          If this workflow fails to produce artifacts, it means one of:
+          - Gamma API response shape changed (check the raw fetch).
+          - wkhtmltopdf / Tera template broke (check the job log).
+          - No active markets matched the configured sections.
+
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EOF
+          )
+          gh pr create \
+            --title "$title" \
+            --body "$body" \
+            --head "$branch" \
+            --base main \
+            --label "nightly-snapshot,do-not-merge"
