@@ -18,7 +18,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class DatabaseSettings(BaseSettings):
     """Database connection settings."""
 
-    model_config = SettingsConfigDict(env_prefix="")
+    model_config = SettingsConfigDict(env_prefix="", env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     url: str = Field(
         alias="DATABASE_URL",
@@ -37,7 +37,7 @@ class DatabaseSettings(BaseSettings):
 class RedisSettings(BaseSettings):
     """Redis connection settings."""
 
-    model_config = SettingsConfigDict(env_prefix="")
+    model_config = SettingsConfigDict(env_prefix="", env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     url: str = Field(
         default="redis://localhost:6379",
@@ -57,7 +57,7 @@ class RedisSettings(BaseSettings):
 class PolygonSettings(BaseSettings):
     """Polygon blockchain RPC settings."""
 
-    model_config = SettingsConfigDict(env_prefix="POLYGON_")
+    model_config = SettingsConfigDict(env_prefix="POLYGON_", env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     rpc_url: str = Field(
         default="https://polygon-rpc.com",
@@ -84,7 +84,7 @@ class PolygonSettings(BaseSettings):
 class PolymarketSettings(BaseSettings):
     """Polymarket API settings."""
 
-    model_config = SettingsConfigDict(env_prefix="POLYMARKET_")
+    model_config = SettingsConfigDict(env_prefix="POLYMARKET_", env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     ws_url: str = Field(
         default="wss://ws-subscriptions-clob.polymarket.com/ws/market",
@@ -95,6 +95,16 @@ class PolymarketSettings(BaseSettings):
         default=None,
         alias="POLYMARKET_API_KEY",
         description="Optional Polymarket API key",
+    )
+    api_secret: SecretStr | None = Field(
+        default=None,
+        alias="POLYMARKET_API_SECRET",
+        description="Polymarket API secret for authenticated access",
+    )
+    api_passphrase: SecretStr | None = Field(
+        default=None,
+        alias="POLYMARKET_API_PASSPHRASE",
+        description="Polymarket API passphrase for authenticated access",
     )
 
     @field_validator("ws_url")
@@ -109,7 +119,7 @@ class PolymarketSettings(BaseSettings):
 class DiscordSettings(BaseSettings):
     """Discord notification settings."""
 
-    model_config = SettingsConfigDict(env_prefix="DISCORD_")
+    model_config = SettingsConfigDict(env_prefix="DISCORD_", env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     webhook_url: SecretStr | None = Field(
         default=None,
@@ -126,7 +136,7 @@ class DiscordSettings(BaseSettings):
 class TelegramSettings(BaseSettings):
     """Telegram notification settings."""
 
-    model_config = SettingsConfigDict(env_prefix="TELEGRAM_")
+    model_config = SettingsConfigDict(env_prefix="TELEGRAM_", env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     bot_token: SecretStr | None = Field(
         default=None,
@@ -215,6 +225,8 @@ class Settings(BaseSettings):
             "polymarket": {
                 "ws_url": self.polymarket.ws_url,
                 "api_key": "(set)" if self.polymarket.api_key else "(not set)",
+                "api_secret": "(set)" if self.polymarket.api_secret else "(not set)",
+                "api_passphrase": "(set)" if self.polymarket.api_passphrase else "(not set)",
             },
             "discord_enabled": str(self.discord.enabled),
             "telegram_enabled": str(self.telegram.enabled),
