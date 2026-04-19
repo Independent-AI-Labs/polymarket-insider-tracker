@@ -225,7 +225,21 @@ class Pipeline:
         api_key = (
             settings.polymarket.api_key.get_secret_value() if settings.polymarket.api_key else None
         )
-        self._clob_client = ClobClient(api_key=api_key)
+        api_secret = (
+            settings.polymarket.api_secret.get_secret_value()
+            if settings.polymarket.api_secret
+            else None
+        )
+        api_passphrase = (
+            settings.polymarket.api_passphrase.get_secret_value()
+            if settings.polymarket.api_passphrase
+            else None
+        )
+        self._clob_client = ClobClient(
+            api_key=api_key,
+            api_secret=api_secret,
+            api_passphrase=api_passphrase,
+        )
 
         # Initialize Market Metadata Sync
         logger.debug("Initializing market metadata sync...")

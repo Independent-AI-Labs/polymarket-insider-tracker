@@ -9,7 +9,7 @@ from functools import wraps
 from typing import ParamSpec, TypeVar
 
 from py_clob_client.client import ClobClient as BaseClobClient
-from py_clob_client.clob_types import BookParams
+from py_clob_client.clob_types import ApiCreds, BookParams
 
 from polymarket_insider_tracker.ingestor.models import Market, Orderbook
 
@@ -20,7 +20,7 @@ T = TypeVar("T")
 
 # Constants
 DEFAULT_HOST = "https://clob.polymarket.com"
-MAX_REQUESTS_PER_SECOND = 10
+MAX_REQUESTS_PER_SECOND = 5  # Polymarket enforces 60 req/10s server-side
 MIN_REQUEST_INTERVAL = 1.0 / MAX_REQUESTS_PER_SECOND  # 0.1 seconds
 
 DEFAULT_MAX_RETRIES = 3
@@ -138,7 +138,10 @@ class ClobClient:
     def __init__(
         self,
         api_key: str | None = None,
+        api_secret: str | None = None,
+        api_passphrase: str | None = None,
         host: str = DEFAULT_HOST,
+        chain_id: int = 137,
         max_retries: int = DEFAULT_MAX_RETRIES,
         requests_per_second: float = MAX_REQUESTS_PER_SECOND,
     ) -> None:
@@ -147,23 +150,42 @@ class ClobClient:
         Args:
             api_key: Polymarket API key. If not provided, reads from
                 POLYMARKET_API_KEY environment variable.
+            api_secret: Polymarket API secret. If not provided, reads from
+                POLYMARKET_API_SECRET environment variable.
+            api_passphrase: Polymarket API passphrase. If not provided, reads from
+                POLYMARKET_API_PASSPHRASE environment variable.
             host: CLOB API endpoint URL.
+            chain_id: Polygon chain ID (default 137 for mainnet).
             max_retries: Maximum retry attempts for failed requests.
             requests_per_second: Rate limit for API requests.
         """
         self._api_key = api_key or os.environ.get("POLYMARKET_API_KEY")
+        self._api_secret = api_secret or os.environ.get("POLYMARKET_API_SECRET")
+        self._api_passphrase = api_passphrase or os.environ.get("POLYMARKET_API_PASSPHRASE")
         self._host = host
         self._max_retries = max_retries
         self._rate_limiter = RateLimiter(requests_per_second)
 
-        # Initialize the underlying client (read-only, no auth needed for queries)
-        self._client = BaseClobClient(host)
-
-        logger.info(
-            "Initialized ClobClient with host=%s, rate_limit=%.1f req/s",
-            host,
-            requests_per_second,
-        )
+        # Initialize the underlying client with auth if all creds are available
+        if self._api_key and self._api_secret and self._api_passphrase:
+            creds = ApiCreds(
+                api_key=self._api_key,
+                api_secret=self._api_secret,
+                api_passphrase=self._api_passphrase,
+            )
+            self._client = BaseClobClient(host, chain_id=chain_id, creds=creds)
+            logger.info(
+                "Initialized ClobClient (authenticated) with host=%s, rate_limit=%.1f req/s",
+                host,
+                requests_per_second,
+            )
+        else:
+            self._client = BaseClobClient(host)
+            logger.info(
+                "Initialized ClobClient (unauthenticated) with host=%s, rate_limit=%.1f req/s",
+                host,
+                requests_per_second,
+            )
 
     def _with_rate_limit(self, func: Callable[P, T]) -> Callable[P, T]:
         """Wrap a function with rate limiting."""

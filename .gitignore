@@ -116,3 +116,9 @@ Thumbs.db
 # Local development
 *.local
 .direnv/
+
+# Generated newsletter artifacts (never committed; regenerated per run)
+reports/
+
+# Captured trade streams (Phase C backtesting harness)
+data/captures/
