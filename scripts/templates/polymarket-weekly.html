@@ -1,0 +1,99 @@
+{# Polymarket weekly retrospective — Tera template.                           #}
+{# Consumed by `himalaya batch send`; row context lives under `report.*`.     #}
+{# Paired with scripts/weekly-newsletter.py::build_rows.                      #}
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f5f5f5">
+<div style="max-width:640px;margin:20px auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1)">
+
+  <div style="background:#1a1a2e;color:#fff;padding:20px 24px">
+    <h1 style="margin:0;font-size:20px;font-weight:600">{{ report.title }}</h1>
+    <p style="margin:6px 0 0;font-size:13px;color:#aaa">Generated {{ report.generated }} UTC</p>
+  </div>
+
+  {# Hit/Miss/Pending table per signal #}
+  <div style="padding:16px 24px;border-bottom:1px solid #eee">
+    <h2 style="margin:0 0 12px;font-size:16px;color:#333">Hit / Miss / Pending</h2>
+    {% if report.metrics_rows | length > 0 %}
+    <table style="width:100%;font-size:13px;border-collapse:collapse">
+      <tr style="background:#f8f8f8">
+        <th style="padding:6px;text-align:left">Signal</th>
+        <th style="padding:6px;text-align:right">Alerts</th>
+        <th style="padding:6px;text-align:right">Hits</th>
+        <th style="padding:6px;text-align:right">Misses</th>
+        <th style="padding:6px;text-align:right">Pending</th>
+        <th style="padding:6px;text-align:right">Precision</th>
+      </tr>
+      {% for m in report.metrics_rows %}
+      <tr>
+        <td style="padding:6px;border-bottom:1px solid #eee">{{ m.signal }}</td>
+        <td style="padding:6px;border-bottom:1px solid #eee;text-align:right">{{ m.alerts_total }}</td>
+        <td style="padding:6px;border-bottom:1px solid #eee;text-align:right;color:#2a8a42">{{ m.hits }}</td>
+        <td style="padding:6px;border-bottom:1px solid #eee;text-align:right;color:#b23b3b">{{ m.misses }}</td>
+        <td style="padding:6px;border-bottom:1px solid #eee;text-align:right;color:#888">{{ m.pending }}</td>
+        <td style="padding:6px;border-bottom:1px solid #eee;text-align:right;font-weight:600">{{ m.precision }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p style="font-size:13px;color:#888">No detector-metrics rows recorded for this window — run the backtest harness.</p>
+    {% endif %}
+  </div>
+
+  {# Top markets by alert density #}
+  <div style="padding:16px 24px;border-bottom:1px solid #eee">
+    <h2 style="margin:0 0 12px;font-size:16px;color:#333">Top markets by alert density</h2>
+    {% if report.top_markets_rows | length > 0 %}
+    <ol style="margin:0;padding-left:24px;font-size:13px;line-height:1.5">
+      {% for row in report.top_markets_rows %}
+      <li style="margin-bottom:4px">
+        <code style="font-size:12px;color:#444">{{ row.market_id | truncate(length=18) }}…</code>
+        &middot; {{ row.alert_count }} alerts
+      </li>
+      {% endfor %}
+    </ol>
+    {% else %}
+    <p style="font-size:13px;color:#888">No alert-daily-rollup rows for this window.</p>
+    {% endif %}
+  </div>
+
+  {# New sniper clusters this week #}
+  <div style="padding:16px 24px;border-bottom:1px solid #eee">
+    <h2 style="margin:0 0 12px;font-size:16px;color:#333">Sniper clusters detected</h2>
+    {% if report.cluster_rows | length > 0 %}
+    <table style="width:100%;font-size:13px;border-collapse:collapse">
+      <tr style="background:#f8f8f8">
+        <th style="padding:6px;text-align:left">Cluster</th>
+        <th style="padding:6px;text-align:right">Wallets</th>
+        <th style="padding:6px;text-align:right">Avg entry Δ</th>
+        <th style="padding:6px;text-align:right">Conf.</th>
+        <th style="padding:6px;text-align:right">Markets</th>
+      </tr>
+      {% for c in report.cluster_rows %}
+      <tr>
+        <td style="padding:6px;border-bottom:1px solid #eee"><code>{{ c.cluster_id }}</code></td>
+        <td style="padding:6px;border-bottom:1px solid #eee;text-align:right">{{ c.wallet_count }}</td>
+        <td style="padding:6px;border-bottom:1px solid #eee;text-align:right">{{ c.avg_entry_delta_seconds }}s</td>
+        <td style="padding:6px;border-bottom:1px solid #eee;text-align:right">{{ c.confidence }}</td>
+        <td style="padding:6px;border-bottom:1px solid #eee;text-align:right">{{ c.markets_in_common }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p style="font-size:13px;color:#888">No sniper clusters detected this week.</p>
+    {% endif %}
+  </div>
+
+  {# Compliance footer (REQ-MAIL-125) — inlined here and in the other cadence
+     templates because himalaya registers a single template at render time,
+     so {% include %} would not resolve. Phase F will normalise this. #}
+  <div style="padding:14px 24px;background:#fafafa;border-top:1px solid #eee;font-size:11px;color:#666;line-height:1.5">
+    {% if reason %}<p style="margin:0 0 6px">You received this email because {{ reason }}.</p>{% endif %}
+    {% if unsubscribe_url %}<p style="margin:0 0 6px"><a href="{{ unsubscribe_url | safe }}">Unsubscribe</a> &middot; one click removes you from all cadences.</p>{% endif %}
+    <p style="margin:0;color:#999">Independent AI Labs &middot; AMI Reports &middot; ami-reports@ami.local</p>
+  </div>
+
+</div>
+</body>
+</html>

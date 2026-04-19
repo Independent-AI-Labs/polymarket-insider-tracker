@@ -1,0 +1,32 @@
+- email: alice@example.com
+  name: Alice
+  subject: "[AMI] Polymarket — Weekly Recap 2026-04-20"
+  report:
+    window_start: "2026-04-13"
+    window_end: "2026-04-20"
+    generated: "2026-04-21 08:00"
+    title: "Polymarket Insider — weekly recap (2026-04-13 to 2026-04-20)"
+    metrics_rows:
+      - signal: fresh_wallet
+        alerts_total: 12
+        hits: 7
+        misses: 3
+        pending: 2
+        precision: "70.0%"
+      - signal: size_anomaly
+        alerts_total: 4
+        hits: 1
+        misses: 2
+        pending: 1
+        precision: "33.3%"
+    top_markets_rows:
+      - market_id: "0xabc1234567890abc"
+        alert_count: 9
+      - market_id: "0xdef4567890abcdef"
+        alert_count: 6
+    cluster_rows:
+      - cluster_id: "clu-42"
+        wallet_count: 4
+        avg_entry_delta_seconds: 48
+        confidence: "0.82"
+        markets_in_common: 3

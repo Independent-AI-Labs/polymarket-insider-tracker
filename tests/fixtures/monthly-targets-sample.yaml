@@ -1,0 +1,36 @@
+- email: alice@example.com
+  name: Alice
+  subject: "[AMI] Polymarket — Calibration Dashboard April 2026"
+  report:
+    window_start: "2026-04-01"
+    window_end:   "2026-05-01"
+    generated:    "2026-05-01 09:00"
+    title:        "Polymarket Insider — calibration dashboard (April 2026)"
+    cluster_count: 17
+    signal_rows:
+      - signal: fresh_wallet
+        alerts_total: 52
+        hits: 31
+        misses: 14
+        pending: 7
+        precision: "68.9%"
+        pnl_uplift_bps: "+820 bps"
+      - signal: size_anomaly
+        alerts_total: 19
+        hits: 6
+        misses: 10
+        pending: 3
+        precision: "37.5%"
+        pnl_uplift_bps: "+140 bps"
+      - signal: combined
+        alerts_total: 60
+        hits: 34
+        misses: 18
+        pending: 8
+        precision: "65.4%"
+        pnl_uplift_bps: "+710 bps"
+    recidivist_wallets:
+      - wallet_address: "0x1111111111111111111111111111111111111111"
+        clusters: 5
+      - wallet_address: "0x2222222222222222222222222222222222222222"
+        clusters: 4

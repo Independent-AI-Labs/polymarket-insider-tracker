@@ -1,0 +1,21 @@
+{# Shared compliance footer (REQ-MAIL-125).                                    #}
+{# Phase F will wire `unsubscribe_url` + `reason` per subscriber.              #}
+{# For the pre-Phase-F state the fields may be absent (internal targets only)  #}
+{# — the `default` filter keeps the template valid in that case.              #}
+<div style="padding:14px 24px;background:#fafafa;border-top:1px solid #eee;font-size:11px;color:#666;line-height:1.5">
+  {% if reason %}
+  <p style="margin:0 0 6px">
+    You received this email because
+    {{ reason | default(value="you are on the internal distribution list") }}.
+  </p>
+  {% endif %}
+  {% if unsubscribe_url %}
+  <p style="margin:0 0 6px">
+    <a href="{{ unsubscribe_url | safe }}">Unsubscribe</a>
+    &middot; one click removes you from all cadences.
+  </p>
+  {% endif %}
+  <p style="margin:0;color:#999">
+    Independent AI Labs &middot; AMI Reports &middot; ami-reports@ami.local
+  </p>
+</div>

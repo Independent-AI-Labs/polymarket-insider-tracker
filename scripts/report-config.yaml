@@ -82,7 +82,16 @@ observations:
 # Sender identity lives in himalaya's account config now — see
 # config/himalaya-account-polymarket.toml.
 email:
+  # Subject line for the daily newsletter (scripts/send-report.py).
   subject_template: "[AMI] Polymarket Snapshot — {date}"
+
+  # Subject line for the weekly retrospective (scripts/weekly-newsletter.py).
+  # Supports {week_start} + {week_end} ISO-date placeholders.
+  weekly_subject_template: "[AMI] Polymarket — Weekly Recap {week_end}"
+
+  # Subject line for the monthly calibration dashboard
+  # (scripts/monthly-newsletter.py). {month} = "Month YYYY".
+  monthly_subject_template: "[AMI] Polymarket — Calibration Dashboard {month}"
 
   # How many rows from the first section to show in the HTML email summary
   summary_top_n: 5

@@ -12,10 +12,15 @@ from pathlib import Path
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-TEMPLATE_PATH = (
-    PROJECT_ROOT / "scripts" / "templates" / "polymarket-newsletter.html"
-)
-FIXTURE_PATH = PROJECT_ROOT / "tests" / "fixtures" / "targets-sample.yaml"
+TEMPLATES_DIR = PROJECT_ROOT / "scripts" / "templates"
+FIXTURES_DIR = PROJECT_ROOT / "tests" / "fixtures"
+
+# Cadence -> (template filename, fixture filename).
+CADENCE_TEMPLATES = {
+    "daily":   ("polymarket-newsletter.html", "targets-sample.yaml"),
+    "weekly":  ("polymarket-weekly.html",     "weekly-targets-sample.yaml"),
+    "monthly": ("polymarket-monthly.html",    "monthly-targets-sample.yaml"),
+}
 
 
 @pytest.fixture(scope="module")
@@ -26,11 +31,10 @@ def himalaya() -> str:
     return binary
 
 
-def test_batch_send_dry_run_renders(himalaya: str, tmp_path: Path) -> None:
-    # himalaya needs *some* account in config to start the command pipeline,
-    # but in dry-run + individual mode it never actually connects. Point it
-    # at an inline config with a `polymarket` stub so the test is hermetic.
-    config_path = tmp_path / "himalaya.toml"
+@pytest.fixture(scope="module")
+def himalaya_config(tmp_path_factory) -> Path:
+    """Inline himalaya config so dry-run never tries to reach a real relay."""
+    config_path = tmp_path_factory.mktemp("himalaya-cfg") / "himalaya.toml"
     config_path.write_text(
         """
 [accounts.polymarket]
@@ -48,16 +52,26 @@ message.send.backend.auth.raw        = "unused-in-dry-run"
 message.save-copy = false
 """
     )
+    return config_path
+
+
+@pytest.mark.parametrize("cadence", sorted(CADENCE_TEMPLATES.keys()))
+def test_batch_send_dry_run_renders(
+    himalaya: str, himalaya_config: Path, cadence: str
+) -> None:
+    template_name, fixture_name = CADENCE_TEMPLATES[cadence]
+    template_path = TEMPLATES_DIR / template_name
+    fixture_path = FIXTURES_DIR / fixture_name
 
     result = subprocess.run(
         [
             himalaya,
             "--output", "json",
             "batch", "send",
-            "--config", str(config_path),
+            "--config", str(himalaya_config),
             "--account", "polymarket",
-            "--template", str(TEMPLATE_PATH),
-            "--data", str(FIXTURE_PATH),
+            "--template", str(template_path),
+            "--data", str(fixture_path),
             "--subject", "{{ subject }}",
             "--dry-run",
             "--yes",
@@ -68,13 +82,12 @@ message.save-copy = false
     )
 
     assert result.returncode == 0, (
-        f"himalaya exited {result.returncode}\n"
+        f"himalaya [{cadence}] exited {result.returncode}\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
-    # JSON summary surfaces every row's email + status.
     import json
     summary = json.loads(result.stdout)
-    assert summary["total"] == 1
+    assert summary["total"] == 1, f"[{cadence}] expected 1 row, got {summary}"
     emails = [r["email"] for r in summary["results"]]
     assert "alice@example.com" in emails
     assert summary["results"][0]["status"] == "dry-run"

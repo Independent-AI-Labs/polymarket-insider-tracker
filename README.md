@@ -352,22 +352,55 @@ uv run python scripts/send-report.py --targets vlad,archive
 uv run python scripts/send-report.py
 ```
 
+### The three cadences
+
+| Cadence | Script | Content | Data source |
+|---------|--------|---------|-------------|
+| **Daily — Overnight watchlist** | `scripts/send-report.py` | Top markets by volume + observation flags + PDF drill-down | Polymarket Gamma API + `alert_daily_rollup` (yesterday) |
+| **Weekly — Hit-or-miss retrospective** | `scripts/weekly-newsletter.py` | Per-signal hit/miss/pending table, top markets by alert density, new sniper clusters | `detector_metrics` + `alert_daily_rollup` + `sniper_clusters` |
+| **Monthly — Calibration dashboard** | `scripts/monthly-newsletter.py` | Per-signal precision + PnL uplift + recidivist sniper wallets | `detector_metrics` + `sniper_clusters` |
+
+`detector_metrics` is populated by the backtest harness
+(`src/polymarket_insider_tracker/backtest/`) — run
+`scripts/capture-trades.py` alongside the live pipeline to build
+captures, then replay them to produce the metrics rows the weekly /
+monthly newsletters read.
+
 ### Scheduling via ami-cron
 
-Daily at 13:00 UTC:
-
 ```bash
+# Daily at 13:00 UTC (after EU close)
 ami-cron add "0 13 * * *" \
   "cd \$AMI_ROOT/projects/polymarket-insider-tracker && uv run python scripts/send-report.py" \
-  --label polymarket-newsletter
+  --label polymarket-daily
+
+# Weekly — Mondays at 08:00 UTC
+ami-cron add "0 8 * * 1" \
+  "cd \$AMI_ROOT/projects/polymarket-insider-tracker && uv run python scripts/weekly-newsletter.py" \
+  --label polymarket-weekly
+
+# Monthly — 1st of each month at 09:00 UTC
+ami-cron add "0 9 1 * *" \
+  "cd \$AMI_ROOT/projects/polymarket-insider-tracker && uv run python scripts/monthly-newsletter.py" \
+  --label polymarket-monthly
+
+# Daily alert roll-up — 00:05 UTC (ahead of the daily newsletter)
+ami-cron add "5 0 * * *" \
+  "cd \$AMI_ROOT/projects/polymarket-insider-tracker && uv run python scripts/compute-daily-rollup.py" \
+  --label polymarket-rollup
+
+# Trade capture — long-running sidecar for the backtest harness
+ami-cron add "@reboot" \
+  "cd \$AMI_ROOT/projects/polymarket-insider-tracker && uv run python scripts/capture-trades.py &" \
+  --label polymarket-capture
 
 # Inspect / remove later
 ami-cron list
-ami-cron remove polymarket-newsletter
+ami-cron remove polymarket-daily
 ```
 
 `ami-cron` injects `AMI_ROOT` and `.boot-linux/bin` onto `PATH` so the
-cron entry resolves `himalaya` / `uv` without a wrapper script.
+cron entries resolve `himalaya` / `uv` without a wrapper script.
 
 ---
 
