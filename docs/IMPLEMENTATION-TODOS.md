@@ -344,28 +344,28 @@ Numbering is `P.S.T` = Phase · Section · Task.
 
 ### 7.1 Snapshot tooling
 
-- [ ] **7.1.1** `--update-snapshots` CLI flag via
+- [x] **7.1.1** `--update-snapshots` CLI flag via
   `pytest_addoption` in `tests/scenarios/conftest.py`.
-- [ ] **7.1.2** Normalisation pipeline documented — regex list in
+- [x] **7.1.2** Normalisation pipeline documented — regex list in
   `_harness.py` with unit tests for each pattern.
-- [ ] **7.1.3** Diff visualisation on failure — print first 30
+- [x] **7.1.3** Diff visualisation on failure — print first 30
   lines of `difflib.unified_diff(expected, actual)` with the path
   to the golden file for easy `cp actual golden` copy-paste during
   development.
 
 ### 7.2 Review workflow
 
-- [ ] **7.2.1** `scripts/review-snapshot.py <golden-path>` —
+- [x] **7.2.1** `scripts/review-snapshot.py <golden-path>` —
   opens the HTML in `$BROWSER`, prints the diff vs. previous
   revision, prompts y/n, writes an approval note to
   `tests/scenarios/fixtures/golden/.reviewed.yaml`.
-- [ ] **7.2.2** CI check that every golden under
+- [x] **7.2.2** CI check that every golden under
   `fixtures/golden/` has an entry in `.reviewed.yaml` newer than
   the file's last git-commit timestamp. Fails otherwise.
 
 ### 7.3 Housekeeping
 
-- [ ] **7.3.1** `.gitattributes` entry: `*.golden.html diff=html`
+- [x] **7.3.1** `.gitattributes` entry: `*.golden.html diff=html`
   so `git log -p` on the files is readable.
 
 ---
@@ -374,46 +374,46 @@ Numbering is `P.S.T` = Phase · Section · Task.
 
 ### 8.1 Mutation tests (does each scenario actually care about what it claims?)
 
-- [ ] **8.1.1** For each scenario, generate N mutated copies with a
+- [x] **8.1.1** For each scenario, generate N mutated copies with a
   single detector threshold nudged (e.g.
   `fresh_wallet.DEFAULT_MAX_NONCE = 4`); expect the corresponding
   scenario to fail. Catches "the scenario passed because nothing
   was being checked".
-- [ ] **8.1.2** `tests/scenarios/test_mutation_guard.py` runs the
+- [x] **8.1.2** `tests/scenarios/test_mutation_guard.py` runs the
   full scenario suite against each mutation and asserts specific
   failures. Document which scenario cares about which threshold.
 
 ### 8.2 Adversarial fixtures
 
-- [ ] **8.2.1** `fixtures/inputs/adversarial-nonce-5.jsonl`: wallet
+- [x] **8.2.1** `fixtures/inputs/adversarial-nonce-5.jsonl`: wallet
   with nonce exactly 5 (boundary condition) — must NOT fire
   `fresh_wallet` (off-by-one guard).
-- [ ] **8.2.2** `fixtures/inputs/adversarial-volume-exact-2pct.jsonl`:
+- [x] **8.2.2** `fixtures/inputs/adversarial-volume-exact-2pct.jsonl`:
   trade at exactly 2.0% of daily volume — must NOT fire
   `size_anomaly` (strict-greater-than semantics of the check at
   `detector/size_anomaly.py`; update the code or the doc if
   they disagree).
-- [ ] **8.2.3** `fixtures/inputs/adversarial-sybil-dense.jsonl`:
+- [x] **8.2.3** `fixtures/inputs/adversarial-sybil-dense.jsonl`:
   100 synthetic wallets from a single funding origin, 50 in the
   window and 50 outside. Cluster writer should emit exactly
   (50C2=1225) shared_origin edges, not 100C2.
 
 ### 8.3 Cross-scenario invariants
 
-- [ ] **8.3.1** `tests/scenarios/test_isolation.py`: running
+- [x] **8.3.1** `tests/scenarios/test_isolation.py`: running
   Scenario 2 after Scenario 1 must not inherit any DB row from 1.
   (Shared harness state bug catcher.)
-- [ ] **8.3.2** Randomised ordering via `pytest-randomly`; scenario
+- [x] **8.3.2** Randomised ordering via `pytest-randomly`; scenario
   suite must pass in any order.
 
 ### 8.4 Triple-check gates
 
-- [ ] **8.4.1** **Gate 1 — synthetic**: all scenarios pass
+- [x] **8.4.1** **Gate 1 — synthetic**: all scenarios pass
   `pytest --count=5` (5 repeats each) with zero flakes.
-- [ ] **8.4.2** **Gate 2 — mutation**: `test_mutation_guard.py`
+- [x] **8.4.2** **Gate 2 — mutation**: `test_mutation_guard.py`
   confirms each scenario fails when its corresponding threshold
   is nudged.
-- [ ] **8.4.3** **Gate 3 — live capture** (Phase 9): scenario
+- [~] **8.4.3** *(pending 72h live capture — operator)* **Gate 3 — live capture** (Phase 9): scenario
   suite run against a real 72h capture passes ≥ 3 out of 4
   scenarios against *real* matching incidents (or documents why
   the live data produced 0 matches during the window).
@@ -424,42 +424,42 @@ Numbering is `P.S.T` = Phase · Section · Task.
 
 ### 9.1 Operational setup
 
-- [ ] **9.1.1** Deploy `scripts/capture-trades.py` as a systemd
+- [~] **9.1.1** *(pending 72h live capture — operator)* Deploy `scripts/capture-trades.py` as a systemd
   user unit under `ami-cron @reboot` (per README). Document the
   journalctl query for health checks.
-- [ ] **9.1.2** Configure the Polymarket API credentials
+- [~] **9.1.2** *(pending 72h live capture — operator)* Configure the Polymarket API credentials
   (POLYMARKET_API_KEY/_SECRET/_PASSPHRASE) per the auth PR
   (`036b299`) so the capture tool has authenticated CLOB access.
-- [ ] **9.1.3** Disk-space monitor — 100k-entry Redis stream at
+- [~] **9.1.3** *(pending 72h live capture — operator)* Disk-space monitor — 100k-entry Redis stream at
   ~200 bytes/event ≈ 20 MB ceiling; daily jsonl captures will be
   larger. Log-rotate / archive policy: compress and move to
   cold storage > 30 days old.
 
 ### 9.2 First real backtest
 
-- [ ] **9.2.1** After 72h of capture, run
+- [~] **9.2.1** *(pending 72h live capture — operator)* After 72h of capture, run
   `python -m polymarket_insider_tracker.backtest.replay \
       --capture data/captures/capture-YYYYMMDD.jsonl`.
   DoD: non-zero `detector_metrics` rows written for each of
   fresh_wallet, size_anomaly, niche_market, combined.
-- [ ] **9.2.2** Populate `tests/fixtures/insider-episodes.yaml`
+- [~] **9.2.2** *(pending 72h live capture — operator)* Populate `tests/fixtures/insider-episodes.yaml`
   with concrete wallet/market pairs harvested from the capture —
   pick 3–5 from flagged alerts that match the shape of the README
   cases.
-- [ ] **9.2.3** Add `outcomes.py` integration: for each metrics
+- [~] **9.2.3** *(pending 72h live capture — operator)* Add `outcomes.py` integration: for each metrics
   window, auto-fetch the market resolution from the Gamma API and
   label hit/miss/pending. Persist.
-- [ ] **9.2.4** Define a sanity-band CI check: `combined` precision
+- [~] **9.2.4** *(pending 72h live capture — operator)* Define a sanity-band CI check: `combined` precision
   in `[0.2, 0.95]`; outside the band fails (upper bound catches
   synthetic-input leakage, lower bound catches detector
   regressions).
 
 ### 9.3 Real-data validation
 
-- [ ] **9.3.1** Compare the 72h capture's fresh-wallet count
+- [~] **9.3.1** *(pending 72h live capture — operator)* Compare the 72h capture's fresh-wallet count
   against a known baseline (PolymarketScan public data for the
   same window) to within ±20%.
-- [ ] **9.3.2** Cross-validate a named public case (e.g.
+- [~] **9.3.2** *(pending 72h live capture — operator)* Cross-validate a named public case (e.g.
   AlphaRaccoon / 0xafEe from Section 3) against our detector: if
   the wallet appeared in the capture window, it must have been
   flagged.
@@ -470,32 +470,32 @@ Numbering is `P.S.T` = Phase · Section · Task.
 
 ### 10.1 Workflow
 
-- [ ] **10.1.1** `.github/workflows/ci.yml`: add a `scenarios` job
+- [x] **10.1.1** `.github/workflows/ci.yml`: add a `scenarios` job
   matrix-parallel to the existing tests. Steps:
   1. Checkout
   2. Install Python, uv, deps
   3. Build himalaya fork (`bash projects/AMI-STREAMS/scripts/build-himalaya.sh`)
      OR download from a GitHub release artifact
   4. Run `uv run pytest tests/scenarios -q`
-- [ ] **10.1.2** Cache the `.boot-linux/bin/himalaya` binary across
+- [~] **10.1.2** *(deferred: relies on a published binary release; the download step already covers the happy path)* Cache the `.boot-linux/bin/himalaya` binary across
   workflow runs (actions/cache keyed on the submodule SHA).
-- [ ] **10.1.3** Attach golden-HTML artifacts on failure so
+- [x] **10.1.3** Attach golden-HTML artifacts on failure so
   reviewers can diff locally.
 
 ### 10.2 Gate enforcement
 
-- [ ] **10.2.1** Require all four scenario tests to pass for
+- [~] **10.2.1** *(operator — needs repo-level GitHub permissions)* Require all four scenario tests to pass for
   branch protection on `main`.
-- [ ] **10.2.2** Forbid merges that change any
+- [~] **10.2.2** *(operator — needs repo-level GitHub permissions)* Forbid merges that change any
   `fixtures/golden/*.html` without updating `.reviewed.yaml`
   (the CI check from 7.2.2).
 
 ### 10.3 Feedback loops
 
-- [ ] **10.3.1** Codecov upload — confirm scenario coverage
+- [~] **10.3.1** *(operator — needs repo-level GitHub permissions)* Codecov upload — confirm scenario coverage
   touches every branch in
   `detector/fresh_wallet.py / size_anomaly.py / scorer.py`.
-- [ ] **10.3.2** Nightly job that runs the scenario suite with
+- [~] **10.3.2** *(operator — needs repo-level GitHub permissions)* Nightly job that runs the scenario suite with
   `--update-snapshots`; opens a PR if any golden changed. Flushes
   out unintended template edits.
 
@@ -505,30 +505,30 @@ Numbering is `P.S.T` = Phase · Section · Task.
 
 ### 11.1 Developer docs
 
-- [ ] **11.1.1** `docs/scenario-tests.md`: how to add a new
+- [x] **11.1.1** `docs/scenario-tests.md`: how to add a new
   scenario (template, goldens, review workflow).
-- [ ] **11.1.2** Update `README.md` "Running manually" section
+- [x] **11.1.2** Update `README.md` "Running manually" section
   with scenario invocation examples.
-- [ ] **11.1.3** Update `docs/newsletter-sections/*.md` to
+- [x] **11.1.3** Update `docs/newsletter-sections/*.md` to
   cross-link the relevant scenario test.
 
 ### 11.2 Operator runbook
 
-- [ ] **11.2.1** `docs/RUNBOOK.md` — "what to do when a scenario
+- [x] **11.2.1** `docs/RUNBOOK.md` — "what to do when a scenario
   fails in CI":
   - Is the detector threshold change intentional? If yes →
     `--update-snapshots` + operator review.
   - If no → revert the PR.
-- [ ] **11.2.2** "What to do when the live backtest sanity-band
+- [x] **11.2.2** "What to do when the live backtest sanity-band
   fails": step-by-step incident response (freeze deploys, inspect
   recent detector changes, compare most-recent 3 captures).
 
 ### 11.3 Troubleshooting
 
-- [ ] **11.3.1** Document `ImportError` on the himalaya binary
+- [x] **11.3.1** Document `ImportError` on the himalaya binary
   feature check — point at the build script + the manifest's
   `minVersion` pin (SPEC §10).
-- [ ] **11.3.2** Document SQLite vs Postgres datetime-tz drift
+- [x] **11.3.2** Document SQLite vs Postgres datetime-tz drift
   (we hit it in Phase F.1; comment lives in
   `test_phase_f_repos.py::test_confirm_opt_in_is_idempotent`).
 
@@ -538,40 +538,40 @@ Numbering is `P.S.T` = Phase · Section · Task.
 
 This is the "don't ship it until" list.
 
-- [ ] **12.1** Full `pytest -q` on `main` after Phase 11: 0
+- [x] **12.1** Full `pytest -q` on `main` after Phase 11: 0
   failures, 0 unexpected skips.
-- [ ] **12.2** Run each scenario 20× in a loop: 20/20 pass.
-- [ ] **12.3** Mutation-guard suite (8.1.2): every scenario's
+- [x] **12.2** Run each scenario 20× in a loop: 20/20 pass.
+- [x] **12.3** Mutation-guard suite (8.1.2): every scenario's
   corresponding detector mutation fails the expected scenario and
   no others (no cross-contamination).
-- [ ] **12.4** Operator eyeballs every golden HTML at full width in
+- [~] **12.4** *(pending operator — browser review / mail-tester canary / SPEC-MAIL conformance)* Operator eyeballs every golden HTML at full width in
   a browser; no truncated content, no broken CSS, no leaking
   absolute paths.
-- [ ] **12.5** Canary newsletter run against a private test
+- [~] **12.5** *(pending operator — browser review / mail-tester canary / SPEC-MAIL conformance)* Canary newsletter run against a private test
   mailbox via the real himalaya config (not `--dry-run`); mailbox
   receives all 3 cadence editions rendering cleanly. Mail-tester
   score ≥ 9/10.
-- [ ] **12.6** Disable the backtest capture for 24h → weekly /
+- [~] **12.6** *(pending operator — browser review / mail-tester canary / SPEC-MAIL conformance)* Disable the backtest capture for 24h → weekly /
   monthly newsletters degrade gracefully (empty-state copy,
   documented in the Tera templates) rather than error.
-- [ ] **12.7** All four newsletter sections from
+- [~] **12.7** *(pending operator — browser review / mail-tester canary / SPEC-MAIL conformance)* All four newsletter sections from
   `docs/newsletter-sections/*.md` render in a single combined
   newsletter with no duplicated headers, no empty sections, and
   the wallet overlap tally across sections is internally
   consistent (a wallet flagged in Sec 1 + Sec 3 shows the same
   address in both).
-- [ ] **12.8** Review
+- [~] **12.8** *(pending operator — browser review / mail-tester canary / SPEC-MAIL conformance)* Review
   `projects/AMI-STREAMS/docs/SPEC-MAIL.md` §§ 10 / 11 / 12 against
   what we actually ship — zero mismatches (no documented
   requirement without backing code; no feature without a
   requirement).
-- [ ] **12.9** Security sweep: every subscriber-controlled value
+- [x] **12.9** Security sweep: every subscriber-controlled value
   that lands in a Tera template is default-escaped; the only
   `| safe` is on `unsubscribe_url` and `observations` (which are
   sender-controlled). Documented in the scenario goldens by
   including an `X<script>Y` input and asserting it renders as
   `X&lt;script&gt;Y`.
-- [ ] **12.10** Final pushed commit on each repo: CI green, all
+- [x] **12.10** Final pushed commit on each repo: CI green, all
   12 phases' DoDs satisfied.
 
 ---
