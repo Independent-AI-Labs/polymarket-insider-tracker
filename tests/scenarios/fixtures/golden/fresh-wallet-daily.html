@@ -1,0 +1,33 @@
+himalaya-ok email=alice@example.com status=dry-run
+data=- email: alice@example.com
+  name: Alice
+  subject: '[AMI] Polymarket Snapshot — 2026-04-19'
+  report:
+    date: '2026-04-19'
+    generated: 2026-04-19 13:00
+    title: Polymarket Snapshot — 2026-04-19
+    stats:
+      Fresh-wallet alerts: '1'
+      Total notional flagged: $30,000
+    summary_markets:
+    - Question: Will Maduro leave office by end of Jan 2026?
+      24h Vol: $15K
+      Liquidity: $4.5K
+    sections:
+    - title: Top Markets
+      market_count: 1
+      markets: []
+    extra_sections: []
+    observations: []
+    config:
+      email:
+        summary_top_n: 5
+        max_observations: 5
+        footer_text: AMI Reports
+        style:
+          font_family: sans-serif
+          max_width: 640px
+          header_bg: '#1a1a2e'
+          header_text: '#ffffff'
+          accent_color: '#aaaaaa'
+
