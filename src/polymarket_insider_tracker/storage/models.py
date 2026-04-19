@@ -11,8 +11,11 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    JSON,
     Boolean,
+    Date,
     DateTime,
+    ForeignKey,
     Index,
     Integer,
     Numeric,
@@ -146,3 +149,66 @@ class DetectorMetricsModel(Base):
     __table_args__ = (
         Index("idx_detector_metrics_window_signal", "window_start", "signal"),
     )
+
+
+class SniperClusterModel(Base):
+    """Persisted output of `SniperDetector.run_clustering`.
+
+    One row per cluster detected in a given run. Membership lives in
+    `sniper_cluster_members` so we can query "which wallets share
+    clusters with wallet X" without parsing JSON blobs.
+    """
+
+    __tablename__ = "sniper_clusters"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    detected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    cluster_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    wallet_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    avg_entry_delta_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3), nullable=True)
+    # Ordered list of market_ids the cluster members share. JSON over
+    # ARRAY so SQLite (test harness) works identically to Postgres.
+    markets_in_common: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+
+    __table_args__ = (
+        Index("idx_sniper_clusters_detected_at", "detected_at"),
+        Index("idx_sniper_clusters_cluster_id", "cluster_id"),
+    )
+
+
+class SniperClusterMemberModel(Base):
+    """Wallet ↔ cluster-row membership row."""
+
+    __tablename__ = "sniper_cluster_members"
+
+    cluster_row_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("sniper_clusters.id", ondelete="CASCADE"), primary_key=True
+    )
+    wallet_address: Mapped[str] = mapped_column(String(42), primary_key=True)
+
+    __table_args__ = (
+        Index("idx_sniper_cluster_members_wallet", "wallet_address"),
+    )
+
+
+class AlertDailyRollupModel(Base):
+    """Per-day, per-market, per-signal alert aggregate.
+
+    Written by `scripts/compute-daily-rollup.py` at 00:05 UTC so the
+    daily newsletter doesn't have to scan the Redis alert indices on
+    every run.
+    """
+
+    __tablename__ = "alert_daily_rollup"
+
+    day: Mapped[datetime] = mapped_column(Date, primary_key=True)
+    market_id: Mapped[str] = mapped_column(String(66), primary_key=True)
+    signal: Mapped[str] = mapped_column(String(32), primary_key=True)
+    alert_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    unique_wallets: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_notional: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
+
+    __table_args__ = (Index("idx_alert_daily_rollup_day", "day"),)
