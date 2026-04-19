@@ -1,0 +1,87 @@
+{# Polymarket newsletter — Tera template.                                     #}
+{# Consumed by himalaya batch send; row context lives under `report.*`.       #}
+{# The Python side (build_targets_data) pre-slices arrays and pre-renders     #}
+{# `**bold**` markers into <strong> spans so the template stays straight      #}
+{# iterator logic.                                                            #}
+{% set s = report.config.email.style %}
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;font-family:{{ s.font_family }};background:#f5f5f5">
+<div style="max-width:{{ s.max_width }};margin:20px auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1)">
+
+  {# Header #}
+  <div style="background:{{ s.header_bg }};color:{{ s.header_text }};padding:20px 24px">
+    <h1 style="margin:0;font-size:20px;font-weight:600">{{ report.title }}</h1>
+    <p style="margin:6px 0 0;font-size:13px;color:{{ s.accent_color }}">{{ report.generated }} UTC</p>
+  </div>
+
+  {# Summary stats #}
+  <div style="padding:16px 24px;background:#fafafa;border-bottom:1px solid #eee">
+    <table style="font-size:14px">
+      {% for key, value in report.stats %}
+      <tr>
+        <td style="padding:4px 12px 4px 0;color:#666">{{ key }}</td>
+        <td style="padding:4px 0;font-weight:600;color:#111">{{ value }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  {# Top markets — the first section, already trimmed to summary_top_n in Python #}
+  {% if report.sections | length > 0 %}
+  <div style="padding:16px 24px">
+    <h2 style="margin:0 0 12px;font-size:16px;color:#333">
+      Top {{ report.config.email.summary_top_n }} — {{ report.sections.0.title }}
+    </h2>
+    <table style="width:100%;font-size:13px;border-collapse:collapse">
+      <tr style="background:#f8f8f8">
+        <th style="padding:8px;text-align:center;width:30px">#</th>
+        <th style="padding:8px;text-align:left">Market</th>
+        <th style="padding:8px;text-align:right">24h Vol</th>
+        <th style="padding:8px;text-align:right">Liquidity</th>
+      </tr>
+      {% for m in report.summary_markets %}
+      <tr>
+        <td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:center;color:#888">{{ loop.index }}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #eee">{{ m.Question }}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right;font-weight:600">{{ m["24h Vol"] }}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right;color:#666">{{ m.Liquidity }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endif %}
+
+  {# Observations — already trimmed + rendered to HTML in Python #}
+  {% if report.observations | length > 0 %}
+  <div style="padding:16px 24px;border-top:1px solid #eee">
+    <h2 style="margin:0 0 10px;font-size:16px;color:#333">Key Observations</h2>
+    <ul style="margin:0;padding-left:20px;font-size:13px;color:#444;line-height:1.5">
+      {% for obs in report.observations %}
+      <li style="margin-bottom:6px">{{ obs | safe }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {# Also-in-this-report — every section after the first #}
+  {% if report.extra_sections | length > 0 %}
+  <div style="padding:16px 24px;border-top:1px solid #eee">
+    <h2 style="margin:0 0 10px;font-size:16px;color:#333">Also in this report</h2>
+    <ul style="margin:0;padding-left:20px;font-size:13px;color:#666">
+      {% for section in report.extra_sections %}
+      <li>{{ section.title }} ({{ section.market_count }} markets)</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {# Footer #}
+  <div style="padding:14px 24px;background:#fafafa;border-top:1px solid #eee;font-size:12px;color:#999;text-align:center">
+    {{ report.config.email.footer_text }}
+  </div>
+
+</div>
+</body>
+</html>

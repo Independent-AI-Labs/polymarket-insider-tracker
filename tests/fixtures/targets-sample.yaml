@@ -1,0 +1,38 @@
+- email: alice@example.com
+  name: Alice
+  subject: "[AMI] Polymarket Snapshot — 2026-04-19"
+  report:
+    date: "2026-04-19"
+    generated: "2026-04-19 13:00"
+    title: "Polymarket Snapshot — 2026-04-19"
+    stats:
+      Top-N 24h volume total: "$12.3M"
+      Top-N all-time volume total: "$456.7M"
+      Top-N liquidity total: "$4.2M"
+    sections:
+      - title: "Top Markets by 24-Hour Volume"
+        markets:
+          - Question: "Will X happen by EOY?"
+            "24h Vol": "$1.2M"
+            Liquidity: "$300K"
+        market_count: 1
+    summary_markets:
+      - Question: "Will X happen by EOY?"
+        "24h Vol": "$1.2M"
+        Liquidity: "$300K"
+    extra_sections:
+      - title: "Top Markets by Liquidity"
+        market_count: 7
+    observations:
+      - "<strong>Thin book</strong>: &quot;sample market&quot; — $1M 24h vol vs $50K liquidity (20x ratio)"
+    config:
+      email:
+        summary_top_n: 5
+        max_observations: 5
+        footer_text: "Full report attached · AMI Reports"
+        style:
+          font_family: "-apple-system, sans-serif"
+          max_width: "640px"
+          header_bg: "#1a1a2e"
+          header_text: "#ffffff"
+          accent_color: "#aaaaaa"

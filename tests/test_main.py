@@ -106,9 +106,12 @@ class TestValidateConfig:
         settings = validate_config()
         assert settings is not None
 
-    def test_validate_config_failure(self, monkeypatch, capsys):
+    def test_validate_config_failure(self, monkeypatch, capsys, tmp_path):
         """Should return None on invalid config."""
-        # Clear any existing DATABASE_URL
+        # Run from a dir with no .env so pydantic-settings can't autoload
+        # DATABASE_URL from the project's .env; monkeypatch.delenv alone
+        # isn't enough because Settings() re-reads the file.
+        monkeypatch.chdir(tmp_path)
         monkeypatch.delenv("DATABASE_URL", raising=False)
 
         settings = validate_config()
@@ -148,8 +151,12 @@ class TestMain:
 
         assert exc_info.value.code == EXIT_SUCCESS
 
-    def test_main_with_invalid_config(self, monkeypatch):
+    def test_main_with_invalid_config(self, monkeypatch, tmp_path):
         """Main should exit with config error on invalid config."""
+        # chdir into a clean dir so the project's .env can't re-hydrate
+        # DATABASE_URL behind monkeypatch's back (otherwise main proceeds
+        # into pipeline startup and blocks on DB/redis/polymarket).
+        monkeypatch.chdir(tmp_path)
         monkeypatch.delenv("DATABASE_URL", raising=False)
 
         with pytest.raises(SystemExit) as exc_info:

@@ -1,0 +1,29 @@
+# Himalaya account fragment for the Polymarket newsletter.
+#
+# Append to ~/.config/himalaya/config.toml (or merge into an existing file).
+# The ami_mail Ansible role (projects/AMI-STREAMS/ansible/roles/ami_mail/)
+# handles the operator's primary account; this fragment is send-only and
+# targets the LAN exim-relay the prototype has always used.
+
+[accounts.polymarket]
+email     = "ami-reports@ami.local"
+signature = "—\nAMI Reports"
+
+# No IMAP read side: the newsletter never reads mail back.
+backend.type = "none"
+
+# SMTP — the LAN exim-relay on the project VLAN accepts unauthenticated
+# submissions from internal hosts, but himalaya's SMTP backend still wants
+# a login + auth stanza. The relay ignores both, so we pass the sender
+# address as the login and a throwaway password. If the relay moves to the
+# public internet this must switch to keyring-backed auth.
+message.send.backend.type            = "smtp"
+message.send.backend.host            = "192.168.50.66"
+message.send.backend.port            = 2526
+message.send.backend.encryption.type = "none"
+message.send.backend.login           = "ami-reports@ami.local"
+message.send.backend.auth.type       = "password"
+message.send.backend.auth.raw        = "unused-lan-relay-accepts-without-auth"
+
+# No "Sent" folder to save into (no IMAP side).
+message.save-copy = false
