@@ -20,6 +20,7 @@ from .base import (
     SignalHit,
     _money,
     _short_wallet,
+    _wallet_list_html,
 )
 from .gates import DEFAULT_GATES, GateConfig, passes_all
 
@@ -62,7 +63,7 @@ class VolumeVelocitySignal(Signal):
             ColumnSpec("baseline_fmt", "Baseline/d", "right", "money"),
             ColumnSpec("multiple_fmt", "Multiple", "right", "text"),
             ColumnSpec("days_active_fmt", "Age", "right", "duration"),
-            ColumnSpec("top_wallets_fmt", "Top contributors", "left", "text"),
+            ColumnSpec("top_wallets_fmt", "Top contributors", "left", "html"),
         ]
 
     def compute(self, context: SignalContext) -> list[SignalHit]:
@@ -122,10 +123,9 @@ class VolumeVelocitySignal(Signal):
             ]
             contribs.sort(key=lambda p: p[1], reverse=True)
             top_contribs = contribs[: self.top_contributors]
-            top_wallets_fmt = ", ".join(
-                f"{_short_wallet(w)} ({_money(a)})"
-                for w, a in top_contribs
-            ) or "—"
+            top_wallets_fmt = _wallet_list_html(
+                [(w, float(a)) for w, a in top_contribs]
+            )
 
             hits.append(
                 SignalHit(

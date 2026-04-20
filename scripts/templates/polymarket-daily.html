@@ -129,6 +129,8 @@
           <td style="padding:10px 8px 10px 0;text-align:{{ cell.align }}">
             {% if cell.link_url %}
             <a href="{{ cell.link_url }}" style="color:{% if cell.format_hint == 'wallet' %}#1a5fb4{% else %}#111{% endif %};text-decoration:none{% if cell.format_hint == 'wallet' %};font-family:monospace;font-size:12px{% elif cell.format_hint == 'money' %};font-weight:600{% endif %}">{{ cell.value }}</a>
+            {% elif cell.format_hint == 'html' %}
+            {{ cell.value | safe }}
             {% elif cell.format_hint == 'money' or cell.format_hint == 'percent' %}
             <span style="font-weight:600">{{ cell.value }}</span>
             {% elif cell.format_hint == 'wallet' %}
