@@ -639,46 +639,91 @@ Three gaps surfaced by `docs/SPEC-MAIL-CONFORMANCE.md`.
 
 ---
 
-## Phase 14 — CLOB wallet attribution
+## Phase 14 — Three-tier trade-ingestion architecture
 
-Surfaced by `docs/WS-SUBSCRIPTION-BUG.md`. The CLOB `/ws/market`
-channel is the only WS endpoint reachable here but it doesn't
-expose the proxy wallet per trade. Insider-tracking detectors
-need that wallet. Strategy: correlate each `last_trade_price`
-frame against the Polygon on-chain log stream (CTFExchange fills)
-and attach the recovered proxy wallet before the pipeline hands
-the trade to the detector stack.
+**Motivation.** CLOB `/ws/market` is the lowest-latency Polymarket
+surface but ships anonymized frames (no `proxyWallet`). Insider
+detection needs the wallet. Rather than retrofitting wallets onto
+the WS feed, treat each data source as a distinct tier with a
+distinct purpose and let the pipeline reconcile them:
 
-**Environmental prerequisite (operator-level, not a code task):**
-this deployment needs either (a) a paid Polygon RPC provider
-(Alchemy / Infura / QuickNode) with `eth_getLogs` enabled — the
-free `polygon-rpc.com` returns "API key disabled" at the tenant
-level — or (b) the `data-api.polymarket.com` hostname unpinned
-from its current 127.0.0.1 resolver hijack so the no-auth public
-`/trades` endpoint becomes reachable. Option (b) is the lower-lift
-path and should be considered before building the full on-chain
-correlator. `curl -v https://polygon-rpc.com` + `getent hosts
-data-api.polymarket.com` will confirm which constraint applies in
-any given environment.
+| Tier | Source | Latency | Wallets | Purpose |
+|-----:|--------|---------|---------|---------|
+| 1 | CLOB `/ws/market` (built) | 100-200 ms | no | hot-path preliminary alerting |
+| 2 | `data-api.polymarket.com/trades` | 2-5 s | yes | wallet + metadata enrichment for Tiers 1/3 |
+| 3 | Polygon `OrderFilled` logs (CTFExchange + NegRiskCtfExchange) | 3-5 s post-block | yes | canonical ground truth; what metrics + backtest read |
 
-### 14.1 On-chain correlation glue
+When two tiers disagree, Tier 3 wins. Tier 2 is the happy-path
+source for anything under five minutes old; Tier 3 is what any
+detector-metrics claim or audit actually scores against.
 
-- [ ] **14.1.1** In `chain_indexer`, expose a
-  `recent_fills_by_market(market_id, since_ts)` lookup indexed by
-  `(market_id, price_tick, size_rounded)`.
-  DoD: unit test seeds 3 synthetic fills and retrieves by
-  (market, ±30s window).
-- [ ] **14.1.2** Pipeline wraps each CLOB `TradeEvent` in a
-  resolver step that calls `recent_fills_by_market` and fills the
-  `wallet_address` field. Miss-rate (no match within 30s) logged
-  as a histogram; target ≤ 5 %.
-  DoD: scenario test feeds a canned CLOB trade + matching
-  synthetic fill and asserts `wallet_address` is populated.
-- [ ] **14.1.3** Add a `--wallet-attribution` CLI flag to
-  `scripts/direct-capture.py` that enables the correlation step so
-  offline captures also carry wallets (for backtest replay).
-  DoD: 1-minute live capture with the flag populates
-  `wallet_address` on > 90 % of rows.
+**Why Tier 3 is separate, not a replacement for Tier 2.** The
+data-api endpoint is an undocumented private surface — Polymarket
+can rename / gate / deprecate it, and it's already geo-blocked in
+many jurisdictions (TR / FR / BE / SG / US). Chain logs are
+neutral and immutable; any Polygon RPC reconstructs them, so the
+project can re-index history on demand. Tier 3 also enables work
+the other tiers can't: wallet activity *before* a wallet's first
+Polymarket trade, cross-market graph analysis across every CTF
+venue on Polygon, and wash-trade / spoofing patterns that only
+show up in the full transaction graph.
+
+### 14.1 Tier 2 — data-api enrichment
+
+- [x] **14.1.1** `scripts/direct-capture.py` grew a
+  `--source {clob-ws, data-api}` flag (default `data-api`).
+  `data-api` mode polls `https://data-api.polymarket.com/trades`,
+  dedupes on `transactionHash`, and emits `TradeEvent`s with
+  `wallet_address` populated from `proxyWallet`.
+  Outcome: 2-minute capture landed 1000 trades at 100 %
+  `wallet_address` populate rate across 615 unique wallets.
+- [x] **14.1.2** New `src/polymarket_insider_tracker/ingestor/data_api.py`
+  module with `DataAPITradePoller`: async poll loop, ring-buffered
+  dedupe set, shared `TradeCallback` shape. Unit tests cover row →
+  TradeEvent mapping, cross-poll dedupe, oldest-first emission,
+  HTTP-error swallowing, start/stop lifecycle.
+  Measured endpoint reality: `limit` caps at 1000 (~40 s coverage);
+  Cloudflare edge serves a cached window that advances on the
+  order of minutes, so defaults are 30 s × 1000 limit. Documented
+  in the module docstring.
+- [ ] **14.1.3** Pipeline wrapper for live mode: a
+  `WalletEnricher` step that joins CLOB WS frames against a
+  rolling window of Tier-2 rows on `(market_id, price, size,
+  timestamp±30 s)`, overwriting the empty `wallet_address` when a
+  match is found. Miss-rate logged; target ≤ 10 % for hot-path
+  alerts (which are "preliminary" anyway, so a miss there is OK).
+  DoD: scenario test seeds synthetic Tier-1 + Tier-2 streams and
+  asserts the merged row carries the wallet.
+
+### 14.2 Tier 3 — on-chain canonical indexer
+
+*Gated on operator provisioning a paid Polygon RPC provider
+(Alchemy / Infura / QuickNode / self-hosted full node) with
+`eth_getLogs` enabled and generous rate limits. `polygon-rpc.com`
+returns "API key disabled" at the tenant level and is not a
+production path.*
+
+- [ ] **14.2.1** New `src/polymarket_insider_tracker/ingestor/chain_indexer.py`:
+  subscribes to `OrderFilled` logs on CTFExchange
+  (`0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E`) and
+  NegRiskCtfExchange
+  (`0xC5d563A36AE78145C45a50134d48A1215220f80a`), tails the chain
+  head via `eth_subscribe newHeads` + `eth_getLogs` per block.
+  DoD: replays the last 1000 blocks offline and writes one
+  canonical row per fill to a new `onchain_fills` table.
+- [ ] **14.2.2** Reconciliation step: for each Tier-2 enriched row,
+  look up the matching `onchain_fills` row by `transactionHash`.
+  On mismatch, log the Tier-2 row's discrepancy and persist the
+  chain version as canonical. Backtest replay reads from
+  `onchain_fills`, not from the jsonl capture.
+  DoD: synthetic test feeds divergent Tier-2 / Tier-3 rows and
+  asserts the detector stack sees the Tier-3 side.
+- [ ] **14.2.3** Historical backfill: a one-shot CLI that walks
+  every block since a given date, writes `onchain_fills` rows,
+  and marks the window as indexed. Enables the "wallet activity
+  before first Polymarket trade" queries.
+  DoD: backfilling 24 h of blocks completes in < 30 min on the
+  provisioned RPC and produces ≥ 50k rows.
 
 ---
 
