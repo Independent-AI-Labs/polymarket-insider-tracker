@@ -1,9 +1,11 @@
+<#multipart type=related>
 <#part type=text/html>
-{# Body uses PNG data-URIs for icons + blockies — universal
-   rendering across Gmail, Apple Mail, Outlook, Thunderbird. CID
-   attachments would need mml-lib Content-ID support (not present
-   in 1.1.2) or a separate Python-side SMTP sender. See
-   scripts/newsletter-daily.py for the rationale. -#}
+{# multipart/related carries this HTML body AND one image/png
+   part per distinct CID emitted during render (loop at bottom).
+   Enabled by our local mml-lib patch that added the `content-id=`
+   attribute on `<#part>`. himalaya's outer wrapper wraps this
+   related-block inside its multipart/mixed when CSV + PDF
+   attachments are also attached, per RFC 2387. -#}
 {# Generic daily-newsletter template. All badges / category colors
    / palette live in detector/signals/base.py — template is a
    dumb iterator. See docs/SPEC-MARKET-SIGNALS.md + docs/signals/*.md.
@@ -187,3 +189,13 @@
 </body>
 </html>
 <#/part>
+{# Inline images — one <#part> per distinct CID emitted during
+   the render. Each maps cid:<name> in the body above to the PNG
+   file on disk. `disposition=inline` keeps them out of clients'
+   attachment bars. `content-id=<name>` emits Content-ID: <<name>>
+   per RFC 5322 (our local mml-lib patch). -#}
+{% for img in inline_images %}
+<#part filename={{ img.path }} type=image/png disposition=inline content-id={{ img.cid }}>
+<#/part>
+{% endfor %}
+<#/multipart>

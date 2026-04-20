@@ -43,7 +43,9 @@ from polymarket_insider_tracker.detector.signals import REGISTRY, SignalContext 
 from polymarket_insider_tracker.detector.signals.base import (  # noqa: E402
     _badge_html,
     _wallet_cell_html,
+    _wallet_list_html,
     category_palette,
+    signal_badges_html,
 )
 from polymarket_insider_tracker.detector.signals import icons as icons_mod  # noqa: E402
 
@@ -259,15 +261,23 @@ def _glossary_row_for_email(name: str, band: str, desc: str) -> dict[str, Any]:
 def _section_to_payload(section) -> dict[str, Any]:
     """Reshape the section into a template-friendly payload.
 
-    Tera's template engine does not reliably handle dynamic dict
-    indexing (`row[col.field]`). So we pre-expand each row into an
-    ordered list of cell dicts with (value, align, format_hint,
-    link_url), one per column. The template iterates cells, no
-    dynamic key access required.
+    Any pre-rendered HTML fields on `row` (wallet_cell_html,
+    top_wallets_fmt) were rendered at compose time in whatever icon
+    mode was active then. Re-render here so the current icon mode
+    (CID for email) governs every badge + blockie occurrence.
     """
     cols = [asdict(c) for c in section.columns]
     rendered_rows = []
     for row in section.rows:
+        # Rehydrate mode-sensitive HTML in-place.
+        if row.get("wallet_address"):
+            row["wallet_cell_html"] = _wallet_cell_html(row["wallet_address"])
+        if row.get("top_wallets"):
+            row["top_wallets_fmt"] = _wallet_list_html([
+                (str(tw.get("address", "")), float(tw.get("amount", 0)))
+                for tw in row["top_wallets"]
+            ])
+
         cells = []
         for col in section.columns:
             value = row.get(col.field, "")
@@ -346,7 +356,15 @@ def report_to_tera_payload(report, cfg: dict[str, Any]) -> dict[str, Any]:
                         "title": m["title"],
                         "url": m["url"],
                         "signals_fmt": m.get("signals_fmt", ""),
-                        "signals_badges_html": m.get("signals_badges_html", ""),
+                        # Re-render in the current icon mode (so CID
+                        # refs register when we're building the email
+                        # payload). The pre-computed HTML in the
+                        # composer's WalletWatch.markets is from
+                        # whatever mode was active at compose time,
+                        # which may not match.
+                        "signals_badges_html": signal_badges_html(
+                            sorted(m.get("signals_with_category", {}).items())
+                        ),
                         "notional_fmt": f"${m['notional']:,.0f}",
                     }
                     for m in w.markets
@@ -462,16 +480,21 @@ def main(argv: list[str] | None = None) -> int:
             LOG.info("  section %s: %d rows", s.signal_id, len(s.rows))
         return 0
 
-    # Email render uses PNG data-URIs. Proper CID attachments would
-    # require patching mml-lib (no Content-ID emitter exists in the
-    # MML grammar — verified against mml-lib-1.1.2 sources) OR a
-    # Python-side SMTP sender that bypasses himalaya. Data-URIs work
-    # in every modern client (Gmail web + mobile, Apple Mail,
-    # Outlook 2016+, Thunderbird) and keep us single-sender.
-    icons_mod.set_render_mode("data_uri")
+    # Email render uses proper CID attachments: multipart/related
+    # carries one `image/png` MIME part per distinct icon / blockie,
+    # referenced via `<img src="cid:…">` in the HTML body. Survives
+    # every mainstream client including Gmail web. Enabled by our
+    # local mml-lib patch that adds `content-id=` attribute support
+    # — upstream PR tracked in AMI-STREAMS/pimalaya-core fork.
+    icons_mod.set_render_mode("cid")
     icons_mod.reset_render_pass()
     payload = report_to_tera_payload(report, cfg)
-    rows = build_rows(payload, cfg, args.targets)
+    inline_images = [
+        {"cid": cid, "path": path}
+        for cid, path in icons_mod.used_cid_parts()
+    ]
+    LOG.info("email: %d inline CID images", len(inline_images))
+    rows = build_rows(payload, cfg, args.targets, inline_images)
     rc = deliver_via_himalaya(
         rows,
         template_path=DAILY_TEMPLATE,
