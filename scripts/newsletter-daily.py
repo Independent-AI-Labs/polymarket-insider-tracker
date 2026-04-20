@@ -38,6 +38,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from newsletter_common import deliver_via_himalaya  # noqa: E402
 
 from polymarket_insider_tracker.detector.composer import compose  # noqa: E402
+from polymarket_insider_tracker.detector.pdf_appendix import render_pdf  # noqa: E402
 from polymarket_insider_tracker.detector.signals import SignalContext  # noqa: E402
 
 LOG = logging.getLogger("newsletter-daily")
@@ -360,10 +361,17 @@ def main(argv: list[str] | None = None) -> int:
     csv_path = write_alerts_csv(report.raw_alerts, report.date, REPORTS_DIR)
     LOG.info("wrote %s (%d rows)", csv_path, len(report.raw_alerts))
     attachments.append(csv_path)
-    pdf_path = REPORTS_DIR / f"market-snapshot-{report.date}.pdf"
-    if pdf_path.exists():
+
+    # Option-B appendix PDF — the analyst's full flagged-activity log.
+    # Retires the legacy market-snapshot PDF per
+    # docs/IMPLEMENTATION-PLAN-SIGNALS.md Phase S3.
+    pdf_path = REPORTS_DIR / f"polymarket-appendix-{report.date}.pdf"
+    try:
+        render_pdf(report, pdf_path)
         attachments.append(pdf_path)
-        LOG.info("attaching existing snapshot %s", pdf_path)
+        LOG.info("wrote appendix PDF %s", pdf_path)
+    except Exception:
+        LOG.exception("appendix PDF render failed; shipping without PDF")
 
     if args.no_send:
         LOG.info("--no-send: rendered context + CSV only")
