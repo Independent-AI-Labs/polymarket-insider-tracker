@@ -57,6 +57,13 @@ REQUIRED_HOSTS: tuple[str, ...] = (
     "gamma-api.polymarket.com",
     "ws-live-data.polymarket.com",
     "data-api.polymarket.com",
+    # Front-end hostnames — newsletter links point at these. If the
+    # upstream resolver returns a block-page IP, the links M. clicks
+    # from Gmail hit a gambling-regulator landing page instead of
+    # Polymarket. Probe also catches the "routable but wrong" case,
+    # not just loopback.
+    "polymarket.com",
+    "www.polymarket.com",
 )
 
 # Public resolvers used as ground truth. First one that answers wins.
@@ -65,6 +72,14 @@ PUBLIC_RESOLVERS: tuple[str, ...] = ("1.1.1.1", "8.8.8.8")
 # Anything in this set means "the system resolver is lying about this
 # hostname." Loopback + the IPv4 null route + empty answers.
 HIJACK_MARKERS: frozenset[str] = frozenset({"", "0.0.0.0", "127.0.0.1", "::1"})
+
+# Suspicious answer fingerprints: ISP / regulator block pages that
+# return a routable-but-wrong IP rather than loopback. We detect
+# these by comparing against public-resolver answers — any time the
+# system answer is NOT in the set of public-resolver answers for the
+# same hostname, we flag it.
+#
+# The check runs per-hostname in `probe_all` below.
 
 
 @dataclass(frozen=True)
@@ -76,11 +91,12 @@ class Probe:
 
 
 def _dig(hostname: str, server: str | None = None, timeout: int = 3) -> str:
-    """Return the first A record for `hostname` via `dig`, or ''.
+    """Return the first A record for `hostname` via `dig`, or ''."""
+    return (_dig_all(hostname, server=server, timeout=timeout) or [""])[0]
 
-    `server=None` uses the system resolver. Errors / timeouts collapse
-    to empty string — the caller treats that as "no routable answer."
-    """
+
+def _dig_all(hostname: str, server: str | None = None, timeout: int = 3) -> list[str]:
+    """Return every A record for `hostname` via `dig`, or []."""
     cmd = [
         "dig",
         "+short",
@@ -96,39 +112,53 @@ def _dig(hostname: str, server: str | None = None, timeout: int = 3) -> str:
             cmd, stderr=subprocess.DEVNULL, text=True, timeout=timeout + 2
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
-        return ""
-    # `dig +short` can emit CNAME lines before A records; pick the
-    # first line that parses as dotted-quad.
+        return []
+    results: list[str] = []
     for line in out.splitlines():
         line = line.strip()
         if not line:
             continue
         parts = line.split(".")
         if len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
-            return line
-    return ""
+            results.append(line)
+    return results
 
 
-def _public_answer(hostname: str) -> str:
-    """Return the first routable answer across PUBLIC_RESOLVERS, or ''."""
+def _public_answers(hostname: str) -> list[str]:
+    """Return the union of all routable answers from public resolvers."""
+    out: set[str] = set()
     for resolver in PUBLIC_RESOLVERS:
-        ans = _dig(hostname, server=resolver)
-        if ans and ans not in HIJACK_MARKERS:
-            return ans
-    return ""
+        for ans in _dig_all(hostname, server=resolver):
+            if ans and ans not in HIJACK_MARKERS:
+                out.add(ans)
+    return sorted(out)
 
 
 def probe_all(hostnames: tuple[str, ...] = REQUIRED_HOSTS) -> list[Probe]:
-    """Run the system-vs-public probe for every hostname."""
+    """Run the system-vs-public probe for every hostname.
+
+    A hostname is HIJACKED when either:
+      - the system answer is loopback / empty / null-route, OR
+      - the system answer is routable but doesn't match ANY of the
+        public resolvers' answers (covers ISP block pages that
+        return a regulator's "blocked" landing IP).
+
+    We pick the patch IP from the public-resolver set so later
+    subscribers can re-run the probe and confirm.
+    """
     results: list[Probe] = []
     for host in hostnames:
-        system = _dig(host)
-        public = _public_answer(host)
-        hijacked = (
-            system in HIJACK_MARKERS
-            and public != ""
-            and public not in HIJACK_MARKERS
-        )
+        system_answers = _dig_all(host)
+        system = system_answers[0] if system_answers else ""
+        public_set = _public_answers(host)
+        public = public_set[0] if public_set else ""
+        if not public:
+            hijacked = False  # can't prove upstream without a known-good reference
+        elif system in HIJACK_MARKERS:
+            hijacked = True
+        else:
+            # Hijacked when no system answer is in the public-resolver set.
+            hijacked = not any(a in public_set for a in system_answers)
         results.append(
             Probe(hostname=host, system_answer=system, public_answer=public, hijacked=hijacked)
         )
@@ -186,31 +216,57 @@ def _strip_existing_block(contents: str) -> str:
 
 
 def apply_patch(probes: list[Probe]) -> int:
-    """Write the managed block into /etc/hosts. Requires root."""
+    """Write the managed block into /etc/hosts. Requires root.
+
+    The probe runs against the system resolver, which reads /etc/hosts
+    first — so hostnames we've already patched look "ok" on subsequent
+    runs. Naively rewriting the block to include only CURRENTLY-hijacked
+    hostnames would strip previously-patched ones and re-expose them to
+    the upstream hijack. So: we keep every hostname in REQUIRED_HOSTS
+    for which a public resolver returns a routable answer, regardless
+    of whether the current-run probe flagged it. The block self-heals
+    (re-pins whatever the public resolvers currently return) and is
+    idempotent.
+    """
     if os.geteuid() != 0:
-        # Re-exec under sudo so the operator gets the password prompt
-        # once, rather than the script silently failing to write.
         print("dns-fix: re-exec under sudo to write /etc/hosts ...", file=sys.stderr)
         argv = ["sudo", sys.executable, *sys.argv]
         os.execvp("sudo", argv)
-        # execvp does not return on success.
         return 1
 
-    if not any(p.hijacked for p in probes):
-        # Still strip any prior block — resolver may have been healed
-        # upstream and the pin is no longer needed.
-        original = HOSTS_FILE.read_text()
-        cleaned = _strip_existing_block(original)
-        if cleaned != original:
-            _atomic_write(HOSTS_FILE, cleaned)
-            print("dns-fix: no hijacks detected; removed stale managed block.")
+    # Build the authoritative block: for every REQUIRED_HOSTS entry,
+    # look up the public-resolver answer directly (not via the system
+    # resolver, which reads /etc/hosts). If public resolution works,
+    # pin it. If not, skip it — no routable upstream means we can't
+    # pin anything useful.
+    pinned: list[tuple[str, str]] = []
+    for host in REQUIRED_HOSTS:
+        public_set = _public_answers(host)
+        if public_set:
+            pinned.append((public_set[0], host))
         else:
-            print("dns-fix: no hijacks, no managed block, nothing to do.")
-        return 0
+            print(
+                f"dns-fix: WARNING — no public-resolver answer for {host}; skipping",
+                file=sys.stderr,
+            )
 
     original = HOSTS_FILE.read_text()
     cleaned = _strip_existing_block(original)
-    new_block = _render_block(probes)
+
+    if not pinned:
+        if cleaned != original:
+            _atomic_write(HOSTS_FILE, cleaned)
+            print("dns-fix: no public-resolver answers; removed stale managed block.")
+        else:
+            print("dns-fix: no public-resolver answers; nothing to do.")
+        return 0
+
+    block_lines = [MARKER_BEGIN]
+    for ip, host in pinned:
+        block_lines.append(f"{ip} {host}")
+    block_lines.append(MARKER_END)
+    new_block = "\n".join(block_lines) + "\n"
+
     if cleaned and not cleaned.endswith("\n"):
         cleaned += "\n"
     updated = cleaned + "\n" + new_block
@@ -218,8 +274,7 @@ def apply_patch(probes: list[Probe]) -> int:
         print("dns-fix: /etc/hosts already correct; no write needed.")
         return 0
     _atomic_write(HOSTS_FILE, updated)
-    n = sum(1 for p in probes if p.hijacked)
-    print(f"dns-fix: patched {n} hostname(s) in /etc/hosts.")
+    print(f"dns-fix: pinned {len(pinned)} hostname(s) in /etc/hosts.")
     return 0
 
 

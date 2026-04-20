@@ -101,6 +101,30 @@ sanity-band: ## Run the detector-metrics sanity-band gate
 snapshot: ## Render the daily snapshot markdown + PDF (no email)
 	$(LOAD_ENV); $(UV) run python scripts/send-report.py --no-send
 
+.PHONY: newsletter-test
+newsletter-test: ## Send the legacy market-snapshot to configured targets and fail if the send didn't land
+	@$(LOAD_ENV); \
+	out=$$( $(UV) run python scripts/send-report.py 2>&1 ); \
+	echo "$$out"; \
+	if echo "$$out" | grep -qE 'Batch complete: [1-9][0-9]*/[1-9][0-9]* sent, 0 failed'; then \
+	  echo "newsletter-test: delivery succeeded"; \
+	else \
+	  echo "newsletter-test: delivery did not succeed — see output above" >&2; \
+	  exit 1; \
+	fi
+
+.PHONY: newsletter-daily
+newsletter-daily: ## Send the Phase N1 daily (alert-led layout) to configured targets
+	@$(LOAD_ENV); \
+	out=$$( $(UV) run python scripts/newsletter-daily.py 2>&1 ); \
+	echo "$$out"; \
+	if echo "$$out" | grep -qE 'Batch complete: [1-9][0-9]*/[1-9][0-9]* sent, 0 failed'; then \
+	  echo "newsletter-daily: delivery succeeded"; \
+	else \
+	  echo "newsletter-daily: delivery did not succeed — see output above" >&2; \
+	  exit 1; \
+	fi
+
 # ── Hygiene ───────────────────────────────────────────────────────
 .PHONY: clean
 clean: ## Remove build + test artefacts (does not touch captures)
