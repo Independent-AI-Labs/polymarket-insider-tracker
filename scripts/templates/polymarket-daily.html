@@ -1,276 +1,103 @@
 <#part type=text/html>
-{% set s = daily.style -%}
+{# Generic daily-newsletter template. Data comes from a DailyReport
+   built by detector.composer. Each section pre-expands its rows
+   into ordered cell lists (payload reshape in newsletter-daily.py)
+   so this template never does dynamic dict indexing. Adding a
+   signal is a Python-side change only — zero template edits.
+   See docs/SPEC-MARKET-SIGNALS.md + docs/signals/*.md. -#}
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;font-family:{{ s.font_family }};background:#f5f5f5;color:#111">
-<div style="max-width:{{ s.max_width }};margin:20px auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1)">
+<body style="margin:0;padding:0;font-family:{{ style.font_family }};background:#f5f5f5;color:#111">
+<div style="max-width:{{ style.max_width }};margin:20px auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1)">
 
-  {# ── Header ─────────────────────────────────────────────────── #}
-  <div style="background:{{ s.header_bg }};color:{{ s.header_text }};padding:24px">
-    <div style="font-size:11px;letter-spacing:0.12em;color:{{ s.accent_color }};text-transform:uppercase">AMI Reports · Overnight Watchlist</div>
-    <h1 style="margin:6px 0 0;font-size:22px;font-weight:600">Polymarket Watchlist — {{ daily.date }}</h1>
-    <p style="margin:6px 0 0;font-size:13px;color:{{ s.accent_color }}">Window: 24 h ending {{ daily.window_end }} UTC</p>
-  </div>
-
-  {# ── Headline ────────────────────────────────────────────────── #}
-  <div style="padding:20px 24px;border-bottom:1px solid #eee;font-size:16px;line-height:1.5">
-    {{ daily.headline | safe }}
-  </div>
-
-  {# ── Wallets (top 5 by notional) ─────────────────────────────── #}
-  <div style="padding:20px 24px;border-bottom:1px solid #eee">
-    <h2 style="margin:0 0 10px;font-size:14px;text-transform:uppercase;letter-spacing:0.08em;color:#333">
-      {% if daily.source_label == "detector-rollup" -%}
-      Today's alpha wallets (detector-flagged)
-      {%- else -%}
-      Most active wallets (by notional)
-      {%- endif %}
-    </h2>
-    {% if daily.alpha_wallets %}
-    <table style="width:100%;border-collapse:collapse;font-size:13px">
-      <thead>
-        <tr style="text-align:left;color:#666;border-bottom:1px solid #eee">
-          <th style="padding:8px 8px 8px 0;font-weight:500">Wallet</th>
-          <th style="padding:8px;font-weight:500">Market</th>
-          <th style="padding:8px;font-weight:500;text-align:right">Notional</th>
-          {% if daily.source_label == "detector-rollup" %}<th style="padding:8px;font-weight:500">Signals</th>{% endif %}
-          <th style="padding:8px 0 8px 8px;font-weight:500"></th>
-        </tr>
-      </thead>
-      <tbody>
-      {% for w in daily.alpha_wallets %}
-        <tr style="border-bottom:1px solid #f5f5f5">
-          <td style="padding:10px 8px 10px 0;font-family:monospace;font-size:12px">
-            <a href="https://polymarket.com/profile/{{ w.wallet_address }}" style="color:#1a5fb4;text-decoration:none">{{ w.wallet_short }}</a>
-          </td>
-          <td style="padding:10px 8px;max-width:280px;overflow:hidden;text-overflow:ellipsis">
-            <a href="https://polymarket.com/event/{{ w.event_slug }}" style="color:#111;text-decoration:none">{{ w.market_title }}</a>
-            <span style="color:#888;font-size:11px">· {{ w.side }}</span>
-          </td>
-          <td style="padding:10px 8px;text-align:right;font-weight:600">${{ w.notional_fmt }}</td>
-          {% if daily.source_label == "detector-rollup" %}<td style="padding:10px 8px;font-size:11px;color:#555">{{ w.signals }}</td>{% endif %}
-          <td style="padding:10px 0 10px 8px;font-size:11px"><a href="https://polymarket.com/profile/{{ w.wallet_address }}" style="color:#1a5fb4">↗</a></td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <p style="margin:0;color:#888;font-size:13px">No trades in this window.</p>
-    {% endif %}
-  </div>
-
-  {# ── Markets (top 3) ─────────────────────────────────────────── #}
-  <div style="padding:20px 24px;border-bottom:1px solid #eee">
-    <h2 style="margin:0 0 10px;font-size:14px;text-transform:uppercase;letter-spacing:0.08em;color:#333">
-      {% if daily.source_label == "detector-rollup" -%}
-      Markets with most insider-shape flow
-      {%- else -%}
-      Top markets by notional (live window)
-      {%- endif %}
-    </h2>
-    {% if daily.top_markets %}
-    <table style="width:100%;border-collapse:collapse;font-size:13px">
-      <thead>
-        <tr style="text-align:left;color:#666;border-bottom:1px solid #eee">
-          <th style="padding:8px 8px 8px 0;font-weight:500">Market</th>
-          <th style="padding:8px;font-weight:500">Closes</th>
-          <th style="padding:8px;font-weight:500;text-align:right">{% if daily.source_label == "detector-rollup" %}Alerts{% else %}Trades{% endif %}</th>
-          <th style="padding:8px;font-weight:500;text-align:right">Wallets</th>
-          <th style="padding:8px 0 8px 8px;font-weight:500;text-align:right">Notional</th>
-        </tr>
-      </thead>
-      <tbody>
-      {% for m in daily.top_markets %}
-        <tr style="border-bottom:1px solid #f5f5f5">
-          <td style="padding:10px 8px 10px 0">
-            <a href="https://polymarket.com/event/{{ m.event_slug }}" style="color:#111;text-decoration:none">{{ m.market_title }}</a>
-          </td>
-          <td style="padding:10px 8px;color:#555;font-size:12px;white-space:nowrap">{{ m.close_at_fmt }}</td>
-          <td style="padding:10px 8px;text-align:right">{{ m.alert_count }}</td>
-          <td style="padding:10px 8px;text-align:right">{{ m.unique_wallets }}</td>
-          <td style="padding:10px 0 10px 8px;text-align:right;font-weight:600">${{ m.notional_fmt }}</td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <p style="margin:0;color:#888;font-size:13px">No markets crossed the alert-density threshold.</p>
-    {% endif %}
-  </div>
-
-  {# ── Asymmetric flow ────────────────────────────────────────── #}
-  {% if daily.asymmetric_flows %}
-  <div style="padding:20px 24px;border-bottom:1px solid #eee">
-    <h2 style="margin:0 0 4px;font-size:14px;text-transform:uppercase;letter-spacing:0.08em;color:#333">
-      Asymmetric flow (one-sided markets)
-    </h2>
-    <p style="margin:0 0 10px;font-size:12px;color:#888;line-height:1.4">
-      Markets where ≥ 70 % of notional went to the same side — the shape informed flow leaves behind.
+  <div style="background:{{ style.header_bg }};color:{{ style.header_text }};padding:24px">
+    <div style="font-size:11px;letter-spacing:0.12em;color:{{ style.accent_color }};text-transform:uppercase">AMI Reports · Polymarket watchlist</div>
+    <h1 style="margin:6px 0 0;font-size:22px;font-weight:600">{{ report.date }}</h1>
+    <p style="margin:6px 0 0;font-size:13px;color:{{ style.accent_color }}">
+      Window: {{ report.window_fmt }} · Source: {{ report.source_label }}
     </p>
-    <table style="width:100%;border-collapse:collapse;font-size:13px">
-      <thead>
-        <tr style="text-align:left;color:#666;border-bottom:1px solid #eee">
-          <th style="padding:8px 8px 8px 0;font-weight:500">Market</th>
-          <th style="padding:8px;font-weight:500">Dominant</th>
-          <th style="padding:8px;font-weight:500;text-align:right">Ratio</th>
-          <th style="padding:8px 0 8px 8px;font-weight:500;text-align:right">Net notional</th>
-        </tr>
-      </thead>
-      <tbody>
-      {% for a in daily.asymmetric_flows %}
-        <tr style="border-bottom:1px solid #f5f5f5">
-          <td style="padding:10px 8px 10px 0">
-            <a href="https://polymarket.com/event/{{ a.event_slug }}" style="color:#111;text-decoration:none">{{ a.market_title }}</a>
-            <div style="color:#888;font-size:11px">{{ a.buy_count }} BUYs / {{ a.sell_count }} SELLs</div>
-          </td>
-          <td style="padding:10px 8px;font-weight:600;color:{% if a.dominant_side == 'BUY' %}#1a7f37{% else %}#cf222e{% endif %}">{{ a.dominant_side }}</td>
-          <td style="padding:10px 8px;text-align:right">{{ a.ratio_pct }}%</td>
-          <td style="padding:10px 0 10px 8px;text-align:right;font-weight:600">${{ a.net_notional_fmt }}</td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
   </div>
-  {% endif %}
 
-  {# ── Time clusters (co-timed wallet entries) ────────────────── #}
-  {% if daily.time_clusters %}
-  <div style="padding:20px 24px;border-bottom:1px solid #eee">
-    <h2 style="margin:0 0 4px;font-size:14px;text-transform:uppercase;letter-spacing:0.08em;color:#333">
-      Co-timed entries
-    </h2>
-    <p style="margin:0 0 10px;font-size:12px;color:#888;line-height:1.4">
-      3+ distinct wallets entering the same market inside a 60 s window. Often coordination, sometimes news-flash bots.
-    </p>
+  <div style="padding:16px 24px;background:#fafafa;border-bottom:1px solid #eee">
     <table style="width:100%;border-collapse:collapse;font-size:13px">
-      <thead>
-        <tr style="text-align:left;color:#666;border-bottom:1px solid #eee">
-          <th style="padding:8px 8px 8px 0;font-weight:500">Market</th>
-          <th style="padding:8px;font-weight:500">Window start (UTC)</th>
-          <th style="padding:8px;font-weight:500;text-align:right">Wallets</th>
-          <th style="padding:8px;font-weight:500;text-align:right">Span</th>
-          <th style="padding:8px 0 8px 8px;font-weight:500;text-align:right">Combined</th>
-        </tr>
-      </thead>
-      <tbody>
-      {% for c in daily.time_clusters %}
-        <tr style="border-bottom:1px solid #f5f5f5">
-          <td style="padding:10px 8px 10px 0">
-            <a href="https://polymarket.com/event/{{ c.event_slug }}" style="color:#111;text-decoration:none">{{ c.market_title }}</a>
-          </td>
-          <td style="padding:10px 8px;color:#555;font-size:12px;white-space:nowrap">{{ c.window_fmt }}</td>
-          <td style="padding:10px 8px;text-align:right;font-weight:600">{{ c.wallet_count }}</td>
-          <td style="padding:10px 8px;text-align:right;color:#555">{{ c.time_span_s }}s</td>
-          <td style="padding:10px 0 10px 8px;text-align:right;font-weight:600">${{ c.combined_notional_fmt }}</td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% endif %}
-
-  {# ── Volume spikes ──────────────────────────────────────────── #}
-  {% if daily.volume_spikes %}
-  <div style="padding:20px 24px;border-bottom:1px solid #eee">
-    <h2 style="margin:0 0 4px;font-size:14px;text-transform:uppercase;letter-spacing:0.08em;color:#333">
-      Volume spikes
-    </h2>
-    <p style="margin:0 0 10px;font-size:12px;color:#888;line-height:1.4">
-      24 h volume ≥ 3× the market's all-time daily average. Markets that suddenly woke up.
-    </p>
-    <table style="width:100%;border-collapse:collapse;font-size:13px">
-      <thead>
-        <tr style="text-align:left;color:#666;border-bottom:1px solid #eee">
-          <th style="padding:8px 8px 8px 0;font-weight:500">Market</th>
-          <th style="padding:8px;font-weight:500;text-align:right">24 h vol</th>
-          <th style="padding:8px;font-weight:500;text-align:right">Baseline/day</th>
-          <th style="padding:8px 0 8px 8px;font-weight:500;text-align:right">Multiple</th>
-        </tr>
-      </thead>
-      <tbody>
-      {% for v in daily.volume_spikes %}
-        <tr style="border-bottom:1px solid #f5f5f5">
-          <td style="padding:10px 8px 10px 0">
-            <a href="https://polymarket.com/event/{{ v.event_slug }}" style="color:#111;text-decoration:none">{{ v.market_title }}</a>
-            <div style="color:#888;font-size:11px">{{ v.days_active }} d active</div>
-          </td>
-          <td style="padding:10px 8px;text-align:right">${{ v.volume_24h_fmt }}</td>
-          <td style="padding:10px 8px;text-align:right;color:#555">${{ v.baseline_fmt }}</td>
-          <td style="padding:10px 0 10px 8px;text-align:right;font-weight:700;color:#9a3412">{{ v.multiple }}×</td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% endif %}
-
-  {# ── Price movers (trade-weighted Δ within window) ──────────── #}
-  {% if daily.price_movers %}
-  <div style="padding:20px 24px;border-bottom:1px solid #eee">
-    <h2 style="margin:0 0 4px;font-size:14px;text-transform:uppercase;letter-spacing:0.08em;color:#333">
-      Price movers
-    </h2>
-    <p style="margin:0 0 10px;font-size:12px;color:#888;line-height:1.4">
-      First-to-last observed trade-price delta within the window. Thin-book moves show up here before gamma's daily stat updates.
-    </p>
-    <table style="width:100%;border-collapse:collapse;font-size:13px">
-      <thead>
-        <tr style="text-align:left;color:#666;border-bottom:1px solid #eee">
-          <th style="padding:8px 8px 8px 0;font-weight:500">Market</th>
-          <th style="padding:8px;font-weight:500">Range</th>
-          <th style="padding:8px;font-weight:500;text-align:right">Δ</th>
-          <th style="padding:8px 0 8px 8px;font-weight:500;text-align:right">Trades</th>
-        </tr>
-      </thead>
-      <tbody>
-      {% for p in daily.price_movers %}
-        <tr style="border-bottom:1px solid #f5f5f5">
-          <td style="padding:10px 8px 10px 0">
-            <a href="https://polymarket.com/event/{{ p.event_slug }}" style="color:#111;text-decoration:none">{{ p.market_title }}</a>
-          </td>
-          <td style="padding:10px 8px;font-family:monospace;font-size:12px;color:#555">{{ p.price_arrow }}</td>
-          <td style="padding:10px 8px;text-align:right;font-weight:700;color:{% if p.delta_bps > 0 %}#1a7f37{% else %}#cf222e{% endif %}">{{ p.delta_fmt }}</td>
-          <td style="padding:10px 0 10px 8px;text-align:right;color:#555">{{ p.trade_count }}</td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% endif %}
-
-  {# ── Funding origin bar — only rendered when funding_transfers  #}
-  {#    has real rows for the flagged wallets. Until the funding    #}
-  {#    tracer runs in prod, this section is omitted rather than    #}
-  {#    carrying a fabricated breakdown.                            #}
-  {% if daily.funding_origins %}
-  <div style="padding:20px 24px;border-bottom:1px solid #eee">
-    <h2 style="margin:0 0 10px;font-size:14px;text-transform:uppercase;letter-spacing:0.08em;color:#333">
-      Funding origin of surfaced wallets
-    </h2>
-    <table style="width:100%;border-collapse:collapse;font-size:13px">
-    {% for f in daily.funding_origins %}
       <tr>
-        <td style="padding:4px 8px 4px 0;width:90px;color:#555">{{ f.label }}</td>
-        <td style="padding:4px 8px;width:60%">
-          <div style="background:#eee;height:10px;border-radius:5px;overflow:hidden">
-            <div style="background:{{ f.color }};height:10px;width:{{ f.pct }}%"></div>
-          </div>
-        </td>
-        <td style="padding:4px 0;text-align:right;color:#333;font-variant-numeric:tabular-nums">{{ f.pct }}%</td>
+      {% for pair in report.summary %}
+        <td style="padding:4px 12px 4px 0;color:#666;white-space:nowrap">{{ pair.0 }}</td>
+        <td style="padding:4px 18px 4px 0;font-weight:700;color:#111;white-space:nowrap">{{ pair.1 }}</td>
+      {% endfor %}
+      </tr>
+    </table>
+  </div>
+
+  <div style="padding:20px 24px;border-bottom:1px solid #eee;font-size:16px;line-height:1.5">
+    {{ report.headline | safe }}
+  </div>
+
+  {% for section in report.sections %}
+  <div style="padding:20px 24px;border-bottom:1px solid #eee">
+    <h2 style="margin:0 0 4px;font-size:14px;text-transform:uppercase;letter-spacing:0.08em;color:#333">
+      {{ section.title }}
+      <span style="font-size:10px;font-weight:400;color:#888;letter-spacing:0.05em;margin-left:8px">({{ section.reliability_band }} reliability)</span>
+    </h2>
+    <p style="margin:0 0 12px;font-size:12px;color:#888;line-height:1.4">{{ section.subtitle }}</p>
+    {% if section.rows %}
+    <table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead>
+        <tr style="text-align:left;color:#666;border-bottom:1px solid #eee">
+          {% for col in section.column_headers %}
+          <th style="padding:8px 8px 8px 0;font-weight:500;text-align:{{ col.align }}">{{ col.header }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+      {% for row in section.rows %}
+        <tr style="border-bottom:1px solid #f5f5f5">
+        {% for cell in row.cells %}
+          <td style="padding:10px 8px 10px 0;text-align:{{ cell.align }}">
+            {% if cell.link_url %}
+            <a href="{{ cell.link_url }}" style="color:{% if cell.format_hint == 'wallet' %}#1a5fb4{% else %}#111{% endif %};text-decoration:none{% if cell.format_hint == 'wallet' %};font-family:monospace;font-size:12px{% elif cell.format_hint == 'money' %};font-weight:600{% endif %}">{{ cell.value }}</a>
+            {% elif cell.format_hint == 'money' or cell.format_hint == 'percent' %}
+            <span style="font-weight:600">{{ cell.value }}</span>
+            {% elif cell.format_hint == 'wallet' %}
+            <span style="font-family:monospace;font-size:12px">{{ cell.value }}</span>
+            {% elif cell.format_hint == 'datetime' or cell.format_hint == 'duration' %}
+            <span style="color:#555;font-size:12px;white-space:nowrap">{{ cell.value }}</span>
+            {% else %}
+            {{ cell.value }}
+            {% endif %}
+          </td>
+        {% endfor %}
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p style="margin:0;color:#888;font-size:13px">No hits this window.</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  <div style="padding:20px 24px;border-bottom:1px solid #eee">
+    <h2 style="margin:0 0 10px;font-size:14px;text-transform:uppercase;letter-spacing:0.08em;color:#333">Signal glossary</h2>
+    <table style="width:100%;border-collapse:collapse;font-size:12px;line-height:1.4;color:#555">
+    {% for g in report.glossary %}
+      <tr style="vertical-align:top">
+        <td style="padding:3px 8px 3px 0;white-space:nowrap;font-weight:600;color:#111">{{ g.0 }}</td>
+        <td style="padding:3px 8px 3px 0;white-space:nowrap;color:#888">({{ g.1 }})</td>
+        <td style="padding:3px 0">{{ g.2 }}</td>
       </tr>
     {% endfor %}
     </table>
   </div>
-  {% endif %}
 
-  {# ── Footer ──────────────────────────────────────────────────── #}
   <div style="padding:20px 24px;background:#fafafa;color:#666;font-size:11px;line-height:1.5">
-    <p style="margin:0 0 6px">{{ daily.footer.legal_name }} · {{ daily.footer.postal_address }}</p>
-    <p style="margin:0 0 6px">You're receiving this because {{ reason }}. CSV of every raw alert and PDF market snapshot are attached.</p>
+    <p style="margin:0 0 6px">{{ report.footer_legal_name }} · {{ report.footer_postal_address }}</p>
+    <p style="margin:0 0 6px">You're receiving this because {{ reason }}. CSV of every raw trade + snapshot PDF are attached.</p>
     <p style="margin:0">
       <a href="{{ unsubscribe_url }}" style="color:#666">Unsubscribe (one-click)</a>
-      · Issue: {{ daily.edition_id }}
+      · Issue: {{ report.edition_id }}
+      · Signal taxonomy: <a href="https://github.com/Independent-AI-Labs/polymarket-insider-tracker/blob/main/docs/SPEC-MARKET-SIGNALS.md" style="color:#666">docs/SPEC-MARKET-SIGNALS.md</a>
     </p>
   </div>
 
