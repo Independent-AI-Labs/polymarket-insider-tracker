@@ -27,7 +27,13 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from .signals import DailyReport
+from .signals import DailyReport, REGISTRY
+from .signals.base import (
+    CATEGORY_PALETTE,
+    category_badges_html,
+    category_palette,
+    signal_badges_html,
+)
 
 LOG = logging.getLogger(__name__)
 
@@ -36,40 +42,84 @@ CSS = """
   html, body { margin: 0; padding: 0; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    font-size: 9.5pt; color: #111; line-height: 1.4;
+    font-size: 9.5pt; color: #111; line-height: 1.45;
+    font-variant-numeric: tabular-nums;
   }
-  h1 { font-size: 18pt; margin: 0 0 4pt; }
-  h2 { font-size: 12pt; margin: 14pt 0 4pt; color: #111;
-       border-bottom: 1px solid #ddd; padding-bottom: 2pt; }
-  h3 { font-size: 10pt; margin: 10pt 0 3pt; color: #222; font-weight: 600; }
+  h1 { font-size: 18pt; margin: 0 0 4pt; letter-spacing: -0.01em; }
+  h2 { font-size: 11pt; margin: 16pt 0 4pt; color: #111;
+       text-transform: uppercase; letter-spacing: 0.08em;
+       font-weight: 700; padding-left: 8pt;
+       border-left: 3px solid #111; }
+  h3 { font-size: 10pt; margin: 10pt 0 3pt; color: #222;
+       font-weight: 600; letter-spacing: -0.005em; }
   p  { margin: 2pt 0; }
-  .sub { color: #666; font-size: 9pt; }
+  .sub { color: #666; font-size: 9pt; margin-bottom: 6pt; }
   .muted { color: #888; font-size: 8.5pt; }
   a { color: #1a5fb4; text-decoration: none; }
   table { width: 100%; border-collapse: collapse; margin: 4pt 0 8pt;
           font-size: 8.5pt; }
-  th, td { padding: 3pt 5pt; border-bottom: 1px solid #eee;
+  th, td { padding: 4pt 6pt; border-bottom: 1px solid #eee;
            text-align: left; vertical-align: top; }
-  th { background: #f5f5f5; font-weight: 600; color: #333; }
+  th { background: #fafafa; font-weight: 600; color: #444;
+       letter-spacing: 0.02em; font-size: 7.5pt;
+       text-transform: uppercase; }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
-  td.mono { font-family: 'Menlo', monospace; font-size: 8pt; }
+  td.mono { font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+            font-size: 8pt; }
   td.tag { font-size: 8pt; color: #555; }
   thead { display: table-header-group; }
   tr, th, td { page-break-inside: avoid; }
-  .cover { background: #1a1a2e; color: #fff; padding: 18pt 20pt;
-           margin: 0 0 14pt; border-radius: 4pt; }
-  .cover .eyebrow { color: #aaa; text-transform: uppercase;
-                    letter-spacing: 0.1em; font-size: 8.5pt; }
-  .cover h1 { margin: 4pt 0 0; color: #fff; }
-  .cover p  { color: #aaa; margin: 4pt 0 0; font-size: 9pt; }
-  .kpi { display: table; margin: 10pt 0 0; font-size: 9pt; }
+
+  /* Cover card: warm, restrained. A 2pt bronze accent line below
+     sets the document apart without shouting. */
+  .cover { background: #1a1a2e; color: #fff; padding: 18pt 22pt;
+           margin: 0 0 0; border-radius: 3pt 3pt 0 0; }
+  .cover .eyebrow { color: #c9c9d6; text-transform: uppercase;
+                    letter-spacing: 0.16em; font-size: 7.5pt;
+                    font-weight: 600; }
+  .cover h1 { margin: 6pt 0 0; color: #fff; font-weight: 600; }
+  .cover p  { color: #a8a8b8; margin: 4pt 0 0; font-size: 8.5pt;
+              letter-spacing: 0.02em; }
+  .cover-rule { height: 2pt; background: #b45309; width: 48pt;
+                margin: 0 0 14pt; }
+  .kpi { display: table; margin: 12pt 0 0; font-size: 9pt; }
   .kpi .row { display: table-row; }
-  .kpi .cell { display: table-cell; padding-right: 16pt; color: #aaa; }
-  .kpi .val  { display: table-cell; padding-right: 16pt; color: #fff;
-               font-weight: 700; font-size: 11pt; }
-  .signal-tag { display: inline-block; background: #eef3ff;
-                color: #1a5fb4; padding: 1pt 5pt; border-radius: 3pt;
-                font-size: 8pt; margin-right: 3pt; }
+  .kpi .cell { display: table-cell; padding-right: 20pt;
+               color: #a8a8b8; font-size: 8pt;
+               letter-spacing: 0.02em; }
+  .kpi .val  { display: table-cell; padding-right: 20pt; color: #fff;
+               font-weight: 700; font-size: 10.5pt; }
+
+  /* Category badges — tone-on-tone, one color per category,
+     shared with the email template via base.CATEGORY_PALETTE. */
+  .badge { display: inline-block; padding: 1pt 6pt;
+           border-radius: 3pt; font-size: 7.5pt; font-weight: 600;
+           letter-spacing: 0.02em; margin-right: 3pt;
+           border: 1px solid; white-space: nowrap; }
+  .badge.informed_flow   { color: #1e3a8a; background: #eff6ff; border-color: #bfdbfe; }
+  .badge.microstructure  { color: #475569; background: #f8fafc; border-color: #cbd5e1; }
+  .badge.volume_liquidity{ color: #92400e; background: #fffbeb; border-color: #fde68a; }
+  .badge.price_dynamics  { color: #7e22ce; background: #faf5ff; border-color: #e9d5ff; }
+  .badge.event_catalyst  { color: #065f46; background: #f0fdf4; border-color: #bbf7d0; }
+  .badge.cross_market    { color: #0e7490; background: #ecfeff; border-color: #a5f3fc; }
+
+  /* Fresh wallet inline flag. */
+  .fresh-flag { display: inline-block; padding: 1pt 5pt;
+                border-radius: 3pt; font-size: 7pt; font-weight: 600;
+                color: #92400e; background: #fffbeb;
+                border: 1px solid #fde68a; margin-left: 4pt; }
+
+  /* Accent cards — restrained paper-tones, not loud banners. */
+  .card-cross-wallet  { border-left: 3px solid #b45309;
+                        background: #fefdf8;
+                        padding: 14pt 16pt; margin: 0 0 14pt; }
+  .card-cross-wallet  h2 { border-left-width: 0; padding-left: 0;
+                           color: #92400e; margin-top: 0; }
+  .card-cross-signal  { border-left: 3px solid #1e3a8a;
+                        background: #fafbff;
+                        padding: 14pt 16pt; margin: 0 0 14pt; }
+  .card-cross-signal  h2 { border-left-width: 0; padding-left: 0;
+                           color: #1e3a8a; margin-top: 0; }
 """
 
 
@@ -144,57 +194,54 @@ def _wallets_to_watch(report: DailyReport) -> str:
     cross_market = [w for w in watches if w.market_count >= 2]
     single_market = [w for w in watches if w.market_count == 1]
 
-    parts = ['<h2>Wallets to watch</h2>']
+    parts = []
     if cross_market:
+        parts.append('<div class="card-cross-wallet">')
+        parts.append('<h2>Wallets to watch · cross-market</h2>')
         parts.append(
-            '<h3 style="margin:8pt 0 4pt;color:#8a4b00">'
-            f'Cross-market wallets ({len(cross_market)}) '
-            '— appear on ≥ 2 flagged markets</h3>'
+            '<p class="sub">Same wallet appears on multiple flagged '
+            'markets — strongest informed-flow tell we can report '
+            'without outcome data.</p>'
         )
-        parts.append(
-            '<p class="muted">Strongest tell: the same proxy wallet '
-            'shows up on multiple flagged markets the same day. Either '
-            'an organised operator, a pro trader with a macro view, or '
-            'an insider with scope across correlated outcomes.</p>'
-        )
-        parts.append(_watches_table(cross_market))
+        parts.append(_watches_table(cross_market, include_markets=True))
+        parts.append('</div>')
 
-    # Cap single-market list — the cross-market tier is what M.
-    # actually cares about.
     top_single = single_market[:15]
     if top_single:
-        parts.append(
-            '<h3 style="margin:12pt 0 4pt;color:#555">'
-            f'Single-market wallets (top {len(top_single)} by notional)</h3>'
-        )
-        parts.append(_watches_table(top_single))
+        parts.append('<h2>Wallets to watch · single-market (top by notional)</h2>')
+        parts.append(_watches_table(top_single, include_markets=True))
     return "".join(parts)
 
 
-def _watches_table(watches) -> str:
+def _watches_table(watches, *, include_markets: bool = True) -> str:
     parts = [
         '<table><thead><tr>'
         '<th>Wallet</th>'
         '<th>First seen</th>'
         '<th class="num">Total flagged</th>'
         '<th class="num">Markets</th>'
-        '<th>Markets / signals</th>'
-        '</tr></thead><tbody>'
     ]
+    if include_markets:
+        parts.append('<th>Appears on</th>')
+    parts.append('</tr></thead><tbody>')
     for w in watches:
-        markets_cell = "<br>".join(
-            (
-                f'<a href="{m["url"]}">{m["title"]}</a> '
-                f'<span class="muted">'
-                f'({", ".join(sorted(m["signals"]))})</span>'
-                f'{"  ★" if m.get("promoted") else ""}'
-            )
-            for m in w.markets[:5]
-        )
-        fresh_tag = (
-            ' <span class="signal-tag" style="background:#fff3cd;color:#8a4b00">fresh</span>'
-            if w.is_fresh else ""
-        )
+        markets_cell = ""
+        if include_markets:
+            rows = []
+            for m in w.markets[:5]:
+                star = (
+                    ' <span style="color:#b45309;font-weight:700">★</span>'
+                    if m.get("promoted") else ""
+                )
+                rows.append(
+                    f'<div style="margin-bottom:3pt">'
+                    f'<a href="{m["url"]}" style="color:#111;font-weight:500">{m["title"]}</a>{star}<br>'
+                    f'<span>{m.get("signals_badges_html", "")}</span> '
+                    f'<span class="muted">${m["notional"]:,.0f}</span>'
+                    f'</div>'
+                )
+            markets_cell = "".join(rows)
+        fresh_tag = ' <span class="fresh-flag">fresh</span>' if w.is_fresh else ""
         first_seen = w.first_seen_fmt or "—"
         parts.append(
             f'<tr>'
@@ -202,9 +249,10 @@ def _watches_table(watches) -> str:
             f'<td>{first_seen}</td>'
             f'<td class="num">${w.total_notional:,.0f}</td>'
             f'<td class="num">{w.market_count}</td>'
-            f'<td>{markets_cell}</td>'
-            f'</tr>'
         )
+        if include_markets:
+            parts.append(f'<td>{markets_cell}</td>')
+        parts.append('</tr>')
     parts.append("</tbody></table>")
     return "".join(parts)
 
@@ -221,28 +269,27 @@ def _cross_signal_tier(report: DailyReport) -> str:
             '<h2>Cross-signal markets</h2>'
             '<p class="muted">No market fired ≥ 2 distinct signal '
             'categories this window. Single-signal hits are in the '
-            'log below — treat them as informational, not as a buy '
-            'recommendation.</p>'
+            'log below — informational, not actionable.</p>'
         )
     parts = [
+        '<div class="card-cross-signal">',
         '<h2>Cross-signal markets</h2>',
         '<p class="sub">Markets where ≥ 2 distinct signal categories '
-        'fired. These are the "multiple lenses agree" cases — '
-        'everything below this tier is a single-signal hit.</p>',
+        'fired — multiple lenses agreeing on the same market.</p>',
     ]
     for p in promoted:
         title_html = (
             f'<a href="{p.market_url}">{p.market_title}</a>'
             if p.market_url else p.market_title
         )
-        tags = " ".join(
-            f'<span class="signal-tag">{s}</span>' for s in p.signal_names
-        )
+        cat_badges = p.category_badges_html
+        sig_badges = p.signal_badges_html
         parts.append(
-            f'<h3>{title_html} {tags}</h3>'
-            f'<p class="muted">Categories firing: '
-            f'{", ".join(p.categories)} · Combined notional: '
-            f'${p.total_notional:,.0f}</p>'
+            f'<h3>{title_html}</h3>'
+            f'<p class="muted" style="margin:2pt 0 6pt">'
+            f'{cat_badges} &nbsp; <span style="color:#888">Notional: '
+            f'${p.total_notional:,.0f}</span></p>'
+            f'<p class="muted" style="margin:0 0 6pt">{sig_badges}</p>'
         )
         parts.append(
             '<table><thead><tr>'
@@ -257,12 +304,12 @@ def _cross_signal_tier(report: DailyReport) -> str:
             if wallet and wallet_url:
                 wallet_cell = f'<a href="{wallet_url}" class="mono">{wallet}</a>'
             else:
-                # Market-level signal — fall back to top_wallets_fmt.
                 wallet_cell = row.get("top_wallets_fmt", "—") or "—"
             extra = _row_extra(row, h["signal_id"])
+            sig_badge = f'<span class="badge {h["category"]}">{h["signal_name"]}</span>'
             parts.append(
                 f'<tr>'
-                f'<td class="tag">{h["signal_name"]}</td>'
+                f'<td>{sig_badge}</td>'
                 f'<td>{wallet_cell}</td>'
                 f'<td>{row.get("side", "") or "—"}</td>'
                 f'<td class="num">{_row_notional(row)}</td>'
@@ -270,6 +317,7 @@ def _cross_signal_tier(report: DailyReport) -> str:
                 f'</tr>'
             )
         parts.append("</tbody></table>")
+    parts.append("</div>")
     return "".join(parts)
 
 
@@ -288,10 +336,11 @@ def _cover(report: DailyReport) -> str:
       <div class="cover">
         <div class="eyebrow">AMI Reports · Polymarket activity log</div>
         <h1>{report.date}</h1>
-        <p>Window: {window_fmt}</p>
-        <p>Edition: {report.edition_id} · Source: {report.source_label}</p>
+        <p>{window_fmt}</p>
+        <p>{report.edition_id} · {report.source_label}</p>
         <div class="kpi">{summary_html}</div>
       </div>
+      <div class="cover-rule"></div>
     """
 
 
@@ -386,12 +435,21 @@ def _by_market_log(report: DailyReport) -> str:
         return "".join(parts)
 
     for _, e in ordered:
-        tags_html = "".join(f'<span class="signal-tag">{s}</span>' for s in sorted(e["signals"]))
+        # Signal set → category badges in consistent order.
+        cats_for_market: dict[str, str] = {}  # signal → category
+        for r in e["rows"]:
+            sid = r.get("signal_id", "")
+            for sig in REGISTRY:
+                if sig.id == sid:
+                    cats_for_market[r["signal"]] = sig.category
+                    break
+        badges_html = signal_badges_html(sorted(cats_for_market.items()))
         title_html = (
             f'<a href="{e["url"]}">{e["title"]}</a>' if e["url"] else e["title"]
         )
         parts.append(
-            f'<h3>{title_html} {tags_html}</h3>'
+            f'<h3>{title_html}</h3>'
+            f'<p class="muted" style="margin:2pt 0 6pt">{badges_html}</p>'
         )
         parts.append(
             '<table><thead><tr>'
@@ -405,9 +463,11 @@ def _by_market_log(report: DailyReport) -> str:
                 if r["wallet"] and r["wallet_url"]
                 else (r["wallet"] or "—")
             )
+            cat = cats_for_market.get(r["signal"], "")
+            sig_badge = f'<span class="badge {cat}">{r["signal"]}</span>' if cat else r["signal"]
             parts.append(
                 f'<tr>'
-                f'<td class="tag">{r["signal"]}</td>'
+                f'<td>{sig_badge}</td>'
                 f'<td class="mono">{wallet_cell}</td>'
                 f'<td>{r["side"] or "—"}</td>'
                 f'<td class="num">{r["notional_fmt"]}</td>'
@@ -519,13 +579,24 @@ def _top_markets_by_flagged(report: DailyReport) -> str:
 def _glossary(report: DailyReport) -> str:
     parts = ["<h2>Signal glossary</h2>"]
     parts.append(
-        '<table><thead><tr><th>Signal</th><th>Reliability</th>'
-        '<th>What it detects</th></tr></thead><tbody>'
+        '<table><thead><tr><th>Signal</th><th>Category</th>'
+        '<th>Reliability</th><th>What it detects</th></tr></thead><tbody>'
     )
     for name, band, desc in report.glossary:
+        category = ""
+        for sig in REGISTRY:
+            if sig.name == name:
+                category = sig.category
+                break
+        cat_badge = (
+            f'<span class="badge {category}">'
+            f'{category_palette(category)["label"]}</span>'
+            if category else ""
+        )
         parts.append(
             f'<tr><td><strong>{name}</strong></td>'
-            f'<td class="tag">{band}</td>'
+            f'<td>{cat_badge}</td>'
+            f'<td class="muted">{band}</td>'
             f'<td>{desc}</td></tr>'
         )
     parts.append("</tbody></table>")

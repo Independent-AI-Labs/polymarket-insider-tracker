@@ -257,7 +257,69 @@ def _wallet_list_html(contribs: list[tuple[str, float]]) -> str:
         parts.append(
             f'<a href="https://polymarket.com/profile/{addr}" '
             f'style="color:#1a5fb4;text-decoration:none;'
-            f'font-family:monospace;font-size:12px">{short}</a> '
-            f'<span style="color:#666">({money_fmt})</span>'
+            f'font-family:ui-monospace,\\"SF Mono\\",Menlo,monospace;'
+            f'font-size:12px">{short}</a> '
+            f'<span style="color:#888;font-variant-numeric:tabular-nums">({money_fmt})</span>'
         )
     return ", ".join(parts)
+
+
+# ── Visual system: category palette + badge helpers ─────────────────
+#
+# Three disciplined colors per category. fg = full-saturation text,
+# bg = 5% tint for badge fill, bd = 15% tint for a hairline border.
+# Tone-on-tone; no candy colors; newsroom/terminal palette.
+
+CATEGORY_PALETTE: dict[str, dict[str, str]] = {
+    "informed_flow":   {"fg": "#1e3a8a", "bg": "#eff6ff", "bd": "#bfdbfe",
+                        "label": "Informed flow"},
+    "microstructure":  {"fg": "#475569", "bg": "#f8fafc", "bd": "#cbd5e1",
+                        "label": "Microstructure"},
+    "volume_liquidity":{"fg": "#92400e", "bg": "#fffbeb", "bd": "#fde68a",
+                        "label": "Volume / liquidity"},
+    "price_dynamics":  {"fg": "#7e22ce", "bg": "#faf5ff", "bd": "#e9d5ff",
+                        "label": "Price dynamics"},
+    "event_catalyst":  {"fg": "#065f46", "bg": "#f0fdf4", "bd": "#bbf7d0",
+                        "label": "Event catalyst"},
+    "cross_market":    {"fg": "#0e7490", "bg": "#ecfeff", "bd": "#a5f3fc",
+                        "label": "Cross-market"},
+}
+_DEFAULT_PALETTE = {"fg": "#374151", "bg": "#f9fafb", "bd": "#e5e7eb",
+                    "label": "Signal"}
+
+
+def category_palette(category: str) -> dict[str, str]:
+    return CATEGORY_PALETTE.get(category, _DEFAULT_PALETTE)
+
+
+def _badge_html(label: str, category: str, *, size: str = "sm") -> str:
+    """Inline-styled badge — Gmail-safe, PDF-safe, zero emoji.
+
+    `size='sm'` = 10px (used for signal-name badges).
+    `size='md'` = 11px (used for category badges in KPI summary).
+    """
+    p = category_palette(category)
+    font_size = "10px" if size == "sm" else "11px"
+    return (
+        f'<span style="display:inline-block;padding:2px 7px;'
+        f'border-radius:3px;font-size:{font_size};font-weight:600;'
+        f'letter-spacing:0.02em;color:{p["fg"]};'
+        f'background:{p["bg"]};border:1px solid {p["bd"]};'
+        f'margin-right:4px;white-space:nowrap">{label}</span>'
+    )
+
+
+def signal_badges_html(
+    signals: list[tuple[str, str]],
+) -> str:
+    """Render a list of (signal_name, category) as a run of badges."""
+    return "".join(_badge_html(name, cat) for name, cat in signals)
+
+
+def category_badges_html(categories: list[str]) -> str:
+    """Render a list of category keys as category-label badges."""
+    parts = []
+    for cat in categories:
+        p = category_palette(cat)
+        parts.append(_badge_html(p["label"], cat, size="md"))
+    return "".join(parts)

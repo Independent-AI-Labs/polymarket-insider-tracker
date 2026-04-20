@@ -292,7 +292,9 @@ def report_to_tera_payload(report, cfg: dict[str, Any]) -> dict[str, Any]:
                 "market_title": p.market_title,
                 "market_url": p.market_url,
                 "categories": p.categories,
+                "category_badges_html": p.category_badges_html,
                 "signal_names": p.signal_names,
+                "signal_badges_html": p.signal_badges_html,
                 "total_notional": p.total_notional,
                 "total_notional_fmt": f"${p.total_notional:,.0f}",
                 "category_count": len(p.categories),
@@ -307,11 +309,13 @@ def report_to_tera_payload(report, cfg: dict[str, Any]) -> dict[str, Any]:
                 "total_notional_fmt": f"${w.total_notional:,.0f}",
                 "is_fresh": w.is_fresh,
                 "first_seen_fmt": w.first_seen_fmt,
+                "category_badges_html": w.category_badges_html,
                 "markets": [
                     {
                         "title": m["title"],
                         "url": m["url"],
-                        "signals_fmt": ", ".join(sorted(m["signals"])),
+                        "signals_fmt": m.get("signals_fmt", ""),
+                        "signals_badges_html": m.get("signals_badges_html", ""),
                         "notional_fmt": f"${m['notional']:,.0f}",
                     }
                     for m in w.markets

@@ -24,6 +24,11 @@ from .signals import (
     SignalContext,
     SignalHit,
 )
+from .signals.base import (
+    category_badges_html,
+    category_palette,
+    signal_badges_html,
+)
 
 LOG = logging.getLogger(__name__)
 
@@ -42,40 +47,49 @@ class PromotedMarket:
     market_url: str
     categories: list[str]
     signal_names: list[str]
-    total_notional: float
+    # (signal_name, category) tuples so downstream renderers can
+    # produce colored badges — one source of truth for palette.
+    signals_with_category: list[tuple[str, str]] = field(default_factory=list)
+    total_notional: float = 0.0
     hit_details: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def category_badges_html(self) -> str:
+        return category_badges_html(self.categories)
+
+    @property
+    def signal_badges_html(self) -> str:
+        return signal_badges_html(self.signals_with_category)
 
 
 @dataclass
 class WalletWatch:
-    """A wallet that appeared in at least one flagged activity.
-
-    WalletWatch rows are the analyst-centric view. Scored by the
-    number of distinct markets the wallet touched (cross-market
-    recurrence is the strongest tell we have) × total notional
-    summed across markets × signal categories it participated in.
-    """
+    """A wallet that appeared in at least one flagged activity."""
 
     address: str
     address_display: str
     profile_url: str
     market_count: int
-    markets: list[dict[str, Any]]  # one entry per market the wallet appeared on
+    markets: list[dict[str, Any]]
     total_notional: float
     signal_names: set[str]
     categories: set[str]
-    # When available: first observed Polymarket trade timestamp
-    # (from fresh-wallet probe). None if never probed.
     first_seen_fmt: str = ""
     is_fresh: bool = False
 
     @property
     def priority_score(self) -> float:
-        """A rough ordering: more markets + more categories + more notional."""
         return (
             100 * self.market_count
             + 10 * len(self.categories)
             + self.total_notional / 10_000
+        )
+
+    @property
+    def category_badges_html(self) -> str:
+        return category_badges_html(
+            sorted(self.categories, key=lambda c: CATEGORY_ORDER.index(c)
+                   if c in CATEGORY_ORDER else 99)
         )
 
 
@@ -184,6 +198,7 @@ def _compute_promoted_markets(hits: list[SignalHit]) -> list[PromotedMarket]:
         if len(e["categories"]) < PROMOTION_MIN_CATEGORIES:
             continue
         hit_details = []
+        signals_with_cat: dict[str, str] = {}  # name → category
         for h in e["hits"]:
             for signal in REGISTRY:
                 if signal.id == h.signal_id:
@@ -196,6 +211,7 @@ def _compute_promoted_markets(hits: list[SignalHit]) -> list[PromotedMarket]:
                             "row": h.row,
                         }
                     )
+                    signals_with_cat[signal.name] = signal.category
                     break
         promoted.append(
             PromotedMarket(
@@ -204,6 +220,7 @@ def _compute_promoted_markets(hits: list[SignalHit]) -> list[PromotedMarket]:
                 market_url=e["market_url"],
                 categories=sorted(e["categories"]),
                 signal_names=sorted(e["signal_names"]),
+                signals_with_category=sorted(signals_with_cat.items()),
                 total_notional=e["total_notional"],
                 hit_details=hit_details,
             )
@@ -277,6 +294,13 @@ def _compute_wallets_to_watch(
             key=lambda m: m["notional"],
             reverse=True,
         )
+        # Pre-render signal-name badges per market (both email and
+        # PDF consume this verbatim).
+        for m in markets_list:
+            sig_items = sorted(m["signals_with_category"].items())
+            m["signals_fmt"] = ", ".join(n for n, _ in sig_items)
+            m["signals_badges_html"] = signal_badges_html(sig_items)
+            m["signals"] = {n for n, _ in sig_items}  # legacy shape
         watches.append(
             WalletWatch(
                 address=addr,
@@ -325,13 +349,13 @@ def _upsert_wallet(
             "market_id": mid,
             "title": hit.market_title,
             "url": f"https://polymarket.com/event/{hit.event_slug}" if hit.event_slug else "",
-            "signals": set(),
+            "signals_with_category": {},  # name → category
             "roles": set(),
             "promoted": market_promoted,
             "notional": 0.0,
         },
     )
-    market_slot["signals"].add(signal_meta.name)
+    market_slot["signals_with_category"][signal_meta.name] = signal_meta.category
     market_slot["roles"].add(role)
     market_slot["notional"] += notional
     market_slot["promoted"] = market_slot["promoted"] or market_promoted
@@ -437,19 +461,30 @@ def _compose_summary(
         Decimal(str(t.get("size", 0))) * Decimal(str(t.get("price", 0)))
         for t in context.trades
     )
-    signal_names = sorted({
-        next((s.name for s in REGISTRY if s.id == h.signal_id), h.signal_id)
-        for h in hits
-    })
+    # Fired signals rendered as badges, ordered by category order.
+    sig_seen: dict[str, str] = {}
+    for h in hits:
+        for s in REGISTRY:
+            if s.id == h.signal_id and s.name not in sig_seen:
+                sig_seen[s.name] = s.category
+                break
+    signal_names_sorted = sorted(
+        sig_seen.items(),
+        key=lambda kv: (
+            CATEGORY_ORDER.index(kv[1]) if kv[1] in CATEGORY_ORDER else 99,
+            kv[0],
+        ),
+    )
+    signals_cell = (
+        signal_badges_html(signal_names_sorted) if signal_names_sorted
+        else '<span style="color:#888">none</span>'
+    )
     cross_market_wallets = sum(1 for w in watches if w.market_count >= 2)
     return [
         ("Trades observed", f"{n_trades:,}"),
         ("Unique wallets", f"{len(wallets):,}"),
         ("Total notional", _money_short(total_notional)),
-        (
-            "Signals firing",
-            ", ".join(signal_names) if signal_names else "none",
-        ),
+        ("Signals firing", signals_cell),
         ("Cross-signal markets", str(len(promoted))),
         ("Cross-market wallets (≥ 2)", str(cross_market_wallets)),
     ]
