@@ -1,69 +1,70 @@
 <#part type=text/html>
-{# Generic daily-newsletter template. Data comes from a DailyReport
-   built by detector.composer. Each section pre-expands its rows
-   into ordered cell lists (payload reshape in newsletter-daily.py)
-   so this template never does dynamic dict indexing. Adding a
-   signal is a Python-side change only — zero template edits.
-   See docs/SPEC-MARKET-SIGNALS.md + docs/signals/*.md. -#}
+{# Generic daily-newsletter template. All badges / category colors
+   / palette live in detector/signals/base.py — template is a
+   dumb iterator. See docs/SPEC-MARKET-SIGNALS.md + docs/signals/*.md.
+-#}
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;font-family:{{ style.font_family }};background:#f5f5f5;color:#111">
-<div style="max-width:{{ style.max_width }};margin:20px auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1)">
+<body style="margin:0;padding:0;font-family:{{ style.font_family }};background:#f5f5f5;color:#111;font-variant-numeric:tabular-nums">
+<div style="max-width:{{ style.max_width }};margin:20px auto;background:#fff;border-radius:4px;overflow:hidden;border:1px solid #e5e7eb">
 
-  <div style="background:{{ style.header_bg }};color:{{ style.header_text }};padding:24px">
-    <div style="font-size:11px;letter-spacing:0.12em;color:{{ style.accent_color }};text-transform:uppercase">AMI Reports · Polymarket watchlist</div>
-    <h1 style="margin:6px 0 0;font-size:22px;font-weight:600">{{ report.date }}</h1>
-    <p style="margin:6px 0 0;font-size:13px;color:{{ style.accent_color }}">
-      Window: {{ report.window_fmt }} · Source: {{ report.source_label }}
+  {# ── Cover strip ───────────────────────────────────────────── #}
+  <div style="background:{{ style.header_bg }};color:{{ style.header_text }};padding:26px 28px 22px">
+    <div style="font-size:10px;letter-spacing:0.18em;color:{{ style.accent_color }};text-transform:uppercase;font-weight:600">AMI Reports · Polymarket Watchlist</div>
+    <h1 style="margin:8px 0 0;font-size:24px;font-weight:600;letter-spacing:-0.01em">{{ report.date }}</h1>
+    <p style="margin:4px 0 0;font-size:12px;color:{{ style.accent_color }};letter-spacing:0.02em">
+      {{ report.window_fmt }} · {{ report.source_label }}
     </p>
   </div>
+  <div style="height:2px;background:linear-gradient(to right,#b45309 0,#b45309 48px,transparent 48px)"></div>
 
-  <div style="padding:16px 24px;background:#fafafa;border-bottom:1px solid #eee">
-    <table style="width:100%;border-collapse:collapse;font-size:13px">
+  {# ── Summary stats ─────────────────────────────────────────── #}
+  <div style="padding:16px 28px;background:#fafafa;border-bottom:1px solid #eee">
+    <table style="width:100%;border-collapse:collapse;font-size:12px">
       <tr>
       {% for pair in report.summary %}
-        <td style="padding:4px 12px 4px 0;color:#666;white-space:nowrap">{{ pair.0 }}</td>
-        <td style="padding:4px 18px 4px 0;font-weight:700;color:#111;white-space:nowrap">{{ pair.1 }}</td>
+        <td style="padding:4px 14px 4px 0;color:#666;white-space:nowrap;letter-spacing:0.02em">{{ pair.0 }}</td>
+        <td style="padding:4px 22px 4px 0;font-weight:700;color:#111;white-space:nowrap;font-size:13px">{{ pair.1 | safe }}</td>
       {% endfor %}
       </tr>
     </table>
   </div>
 
-  <div style="padding:20px 24px;border-bottom:1px solid #eee;font-size:16px;line-height:1.5">
+  {# ── Headline ─────────────────────────────────────────────── #}
+  <div style="padding:20px 28px;border-bottom:1px solid #eee;font-size:15px;line-height:1.55;color:#222">
     {{ report.headline | safe }}
   </div>
 
+  {# ── Cross-market wallets ─────────────────────────────────── #}
   {% if report.cross_market_wallets %}
-  <div style="padding:20px 24px;border-bottom:1px solid #eee;background:#fff3cd">
-    <h2 style="margin:0 0 4px;font-size:14px;text-transform:uppercase;letter-spacing:0.08em;color:#8a4b00">
-      Cross-market wallets
-    </h2>
-    <p style="margin:0 0 12px;font-size:12px;color:#555;line-height:1.4">
-      Same wallet, multiple flagged markets today. Strongest informed-flow tell we can report without outcome data.
-    </p>
-    <table style="width:100%;border-collapse:collapse;font-size:13px">
+  <div style="padding:22px 28px;border-bottom:1px solid #eee;border-left:3px solid #b45309;background:#fefdf8">
+    <h2 style="margin:0 0 4px;font-size:12px;text-transform:uppercase;letter-spacing:0.1em;color:#92400e;font-weight:700">Cross-market wallets</h2>
+    <p style="margin:0 0 14px;font-size:12px;color:#666;line-height:1.5">Same wallet on multiple flagged markets — the strongest informed-flow tell we can report without outcome data.</p>
+    <table style="width:100%;border-collapse:collapse;font-size:12.5px">
       <thead>
         <tr style="text-align:left;color:#666;border-bottom:1px solid #eee">
-          <th style="padding:8px 8px 8px 0;font-weight:500">Wallet</th>
-          <th style="padding:8px;font-weight:500;text-align:right">Markets</th>
-          <th style="padding:8px;font-weight:500;text-align:right">Total flagged</th>
-          <th style="padding:8px 0 8px 8px;font-weight:500">Appears on</th>
+          <th style="padding:6px 10px 6px 0;font-weight:600;letter-spacing:0.02em">Wallet</th>
+          <th style="padding:6px;font-weight:600;text-align:right">Markets</th>
+          <th style="padding:6px;font-weight:600;text-align:right">Total flagged</th>
+          <th style="padding:6px 0 6px 10px;font-weight:600">Appears on</th>
         </tr>
       </thead>
       <tbody>
       {% for w in report.cross_market_wallets %}
         <tr style="border-bottom:1px solid #f5f5f5">
-          <td style="padding:10px 8px 10px 0;font-family:monospace;font-size:12px">
+          <td style="padding:10px 10px 10px 0;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;vertical-align:top">
             <a href="{{ w.profile_url }}" style="color:#1a5fb4;text-decoration:none">{{ w.address_display }}</a>
-            {% if w.is_fresh %}<span style="background:#fff;color:#8a4b00;padding:1px 5px;border-radius:3px;font-size:10px;margin-left:4px">fresh {{ w.first_seen_fmt }}</span>{% endif %}
+            {% if w.is_fresh %}<div style="margin-top:3px;display:inline-block;padding:2px 7px;border-radius:3px;font-size:10px;font-weight:600;color:#92400e;background:#fffbeb;border:1px solid #fde68a;font-family:{{ style.font_family }}">fresh · {{ w.first_seen_fmt }}</div>{% endif %}
           </td>
-          <td style="padding:10px 8px;text-align:right;font-weight:700">{{ w.market_count }}</td>
-          <td style="padding:10px 8px;text-align:right;font-weight:700">{{ w.total_notional_fmt }}</td>
-          <td style="padding:10px 0 10px 8px;font-size:12px;color:#333;line-height:1.5">
+          <td style="padding:10px;text-align:right;font-weight:700;vertical-align:top">{{ w.market_count }}</td>
+          <td style="padding:10px;text-align:right;font-weight:700;vertical-align:top">{{ w.total_notional_fmt }}</td>
+          <td style="padding:10px 0 10px 10px;font-size:12px;color:#333;line-height:1.65;vertical-align:top">
             {% for m in w.markets %}
-            <a href="{{ m.url }}" style="color:#111;text-decoration:none">{{ m.title }}</a>
-            <span style="color:#888;font-size:11px">· {{ m.signals_fmt }} · {{ m.notional_fmt }}</span><br>
+            <div style="margin-bottom:6px">
+              <a href="{{ m.url }}" style="color:#111;text-decoration:none;font-weight:500">{{ m.title }}</a>
+              <div style="margin-top:3px">{{ m.signals_badges_html | safe }} <span style="color:#888;font-size:11px">· {{ m.notional_fmt }}</span></div>
+            </div>
             {% endfor %}
           </td>
         </tr>
@@ -73,32 +74,27 @@
   </div>
   {% endif %}
 
+  {# ── Cross-signal markets ─────────────────────────────────── #}
   {% if report.promoted_markets %}
-  <div style="padding:20px 24px;border-bottom:1px solid #eee;background:#fffdf5">
-    <h2 style="margin:0 0 4px;font-size:14px;text-transform:uppercase;letter-spacing:0.08em;color:#8a4b00">
-      Cross-signal markets
-    </h2>
-    <p style="margin:0 0 12px;font-size:12px;color:#888;line-height:1.4">
-      Markets where ≥ 2 distinct signal categories fired. The rest of
-      this email is single-signal hits — treat those as informational,
-      not a buy recommendation.
-    </p>
-    <table style="width:100%;border-collapse:collapse;font-size:13px">
+  <div style="padding:22px 28px;border-bottom:1px solid #eee;border-left:3px solid #1e3a8a">
+    <h2 style="margin:0 0 4px;font-size:12px;text-transform:uppercase;letter-spacing:0.1em;color:#1e3a8a;font-weight:700">Cross-signal markets</h2>
+    <p style="margin:0 0 14px;font-size:12px;color:#666;line-height:1.5">Markets where ≥ 2 distinct signal categories fired. Below this tier are single-signal hits — informational, not actionable.</p>
+    <table style="width:100%;border-collapse:collapse;font-size:12.5px">
       <thead>
         <tr style="text-align:left;color:#666;border-bottom:1px solid #eee">
-          <th style="padding:8px 8px 8px 0;font-weight:500">Market</th>
-          <th style="padding:8px;font-weight:500">Categories</th>
-          <th style="padding:8px;font-weight:500">Signals firing</th>
-          <th style="padding:8px 0 8px 8px;font-weight:500;text-align:right">Notional</th>
+          <th style="padding:6px 10px 6px 0;font-weight:600;letter-spacing:0.02em">Market</th>
+          <th style="padding:6px;font-weight:600">Categories</th>
+          <th style="padding:6px;font-weight:600">Signals</th>
+          <th style="padding:6px 0 6px 10px;font-weight:600;text-align:right">Notional</th>
         </tr>
       </thead>
       <tbody>
       {% for p in report.promoted_markets %}
         <tr style="border-bottom:1px solid #f5f5f5">
-          <td style="padding:10px 8px 10px 0"><a href="{{ p.market_url }}" style="color:#111;text-decoration:none">{{ p.market_title }}</a></td>
-          <td style="padding:10px 8px;color:#555">{{ p.category_count }}</td>
-          <td style="padding:10px 8px;font-size:11px;color:#555">{% for s in p.signal_names %}{{ s }}{% if not loop.last %}, {% endif %}{% endfor %}</td>
-          <td style="padding:10px 0 10px 8px;text-align:right;font-weight:700">{{ p.total_notional_fmt }}</td>
+          <td style="padding:10px 10px 10px 0;vertical-align:top"><a href="{{ p.market_url }}" style="color:#111;text-decoration:none;font-weight:500">{{ p.market_title }}</a></td>
+          <td style="padding:10px;vertical-align:top">{{ p.category_badges_html | safe }}</td>
+          <td style="padding:10px;vertical-align:top">{{ p.signal_badges_html | safe }}</td>
+          <td style="padding:10px 0 10px 10px;text-align:right;font-weight:700;vertical-align:top">{{ p.total_notional_fmt }}</td>
         </tr>
       {% endfor %}
       </tbody>
@@ -106,19 +102,20 @@
   </div>
   {% endif %}
 
+  {# ── Per-signal sections ──────────────────────────────────── #}
   {% for section in report.sections %}
-  <div style="padding:20px 24px;border-bottom:1px solid #eee">
-    <h2 style="margin:0 0 4px;font-size:14px;text-transform:uppercase;letter-spacing:0.08em;color:#333">
+  <div style="padding:22px 28px;border-bottom:1px solid #eee">
+    <h2 style="margin:0 0 4px;font-size:12px;text-transform:uppercase;letter-spacing:0.1em;color:#111;font-weight:700">
       {{ section.title }}
-      <span style="font-size:10px;font-weight:400;color:#888;letter-spacing:0.05em;margin-left:8px">({{ section.reliability_band }} reliability)</span>
+      <span style="font-size:10px;font-weight:500;color:#888;letter-spacing:0.04em;margin-left:10px;text-transform:none">{{ section.reliability_band }} reliability</span>
     </h2>
-    <p style="margin:0 0 12px;font-size:12px;color:#888;line-height:1.4">{{ section.subtitle }}</p>
+    <p style="margin:0 0 14px;font-size:12px;color:#666;line-height:1.5">{{ section.subtitle }}</p>
     {% if section.rows %}
-    <table style="width:100%;border-collapse:collapse;font-size:13px">
+    <table style="width:100%;border-collapse:collapse;font-size:12.5px">
       <thead>
         <tr style="text-align:left;color:#666;border-bottom:1px solid #eee">
           {% for col in section.column_headers %}
-          <th style="padding:8px 8px 8px 0;font-weight:500;text-align:{{ col.align }}">{{ col.header }}</th>
+          <th style="padding:6px 10px 6px 0;font-weight:600;letter-spacing:0.02em;text-align:{{ col.align }}">{{ col.header }}</th>
           {% endfor %}
         </tr>
       </thead>
@@ -126,17 +123,17 @@
       {% for row in section.rows %}
         <tr style="border-bottom:1px solid #f5f5f5">
         {% for cell in row.cells %}
-          <td style="padding:10px 8px 10px 0;text-align:{{ cell.align }}">
+          <td style="padding:10px 10px 10px 0;text-align:{{ cell.align }};vertical-align:top">
             {% if cell.link_url %}
-            <a href="{{ cell.link_url }}" style="color:{% if cell.format_hint == 'wallet' %}#1a5fb4{% else %}#111{% endif %};text-decoration:none{% if cell.format_hint == 'wallet' %};font-family:monospace;font-size:12px{% elif cell.format_hint == 'money' %};font-weight:600{% endif %}">{{ cell.value }}</a>
+            <a href="{{ cell.link_url }}" style="color:{% if cell.format_hint == 'wallet' %}#1a5fb4{% else %}#111{% endif %};text-decoration:none{% if cell.format_hint == 'wallet' %};font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px{% elif cell.format_hint == 'money' %};font-weight:600{% endif %}">{{ cell.value }}</a>
             {% elif cell.format_hint == 'html' %}
             {{ cell.value | safe }}
             {% elif cell.format_hint == 'money' or cell.format_hint == 'percent' %}
             <span style="font-weight:600">{{ cell.value }}</span>
             {% elif cell.format_hint == 'wallet' %}
-            <span style="font-family:monospace;font-size:12px">{{ cell.value }}</span>
+            <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px">{{ cell.value }}</span>
             {% elif cell.format_hint == 'datetime' or cell.format_hint == 'duration' %}
-            <span style="color:#555;font-size:12px;white-space:nowrap">{{ cell.value }}</span>
+            <span style="color:#666;font-size:12px;white-space:nowrap">{{ cell.value }}</span>
             {% else %}
             {{ cell.value }}
             {% endif %}
@@ -147,31 +144,33 @@
       </tbody>
     </table>
     {% else %}
-    <p style="margin:0;color:#888;font-size:13px">No hits this window.</p>
+    <p style="margin:0;color:#888;font-size:12px">No hits this window.</p>
     {% endif %}
   </div>
   {% endfor %}
 
-  <div style="padding:20px 24px;border-bottom:1px solid #eee">
-    <h2 style="margin:0 0 10px;font-size:14px;text-transform:uppercase;letter-spacing:0.08em;color:#333">Signal glossary</h2>
-    <table style="width:100%;border-collapse:collapse;font-size:12px;line-height:1.4;color:#555">
+  {# ── Glossary ─────────────────────────────────────────────── #}
+  <div style="padding:22px 28px;border-bottom:1px solid #eee;background:#fafafa">
+    <h2 style="margin:0 0 12px;font-size:12px;text-transform:uppercase;letter-spacing:0.1em;color:#111;font-weight:700">Signal glossary</h2>
+    <table style="width:100%;border-collapse:collapse;font-size:11.5px;line-height:1.5;color:#444">
     {% for g in report.glossary %}
       <tr style="vertical-align:top">
-        <td style="padding:3px 8px 3px 0;white-space:nowrap;font-weight:600;color:#111">{{ g.0 }}</td>
-        <td style="padding:3px 8px 3px 0;white-space:nowrap;color:#888">({{ g.1 }})</td>
-        <td style="padding:3px 0">{{ g.2 }}</td>
+        <td style="padding:4px 12px 4px 0;white-space:nowrap;font-weight:600;color:#111">{{ g.0 }}</td>
+        <td style="padding:4px 12px 4px 0;white-space:nowrap;color:#888;font-size:10px;letter-spacing:0.04em;text-transform:uppercase">{{ g.1 }}</td>
+        <td style="padding:4px 0">{{ g.2 }}</td>
       </tr>
     {% endfor %}
     </table>
   </div>
 
-  <div style="padding:20px 24px;background:#fafafa;color:#666;font-size:11px;line-height:1.5">
-    <p style="margin:0 0 6px">{{ report.footer_legal_name }} · {{ report.footer_postal_address }}</p>
-    <p style="margin:0 0 6px">You're receiving this because {{ reason }}. CSV of every raw trade + snapshot PDF are attached.</p>
+  {# ── Footer ──────────────────────────────────────────────── #}
+  <div style="padding:20px 28px;color:#888;font-size:10.5px;line-height:1.6;letter-spacing:0.02em">
+    <p style="margin:0 0 4px">{{ report.footer_legal_name }} · {{ report.footer_postal_address }}</p>
+    <p style="margin:0 0 4px">You're receiving this because {{ reason }}. CSV of every raw trade + analyst-appendix PDF are attached.</p>
     <p style="margin:0">
-      <a href="{{ unsubscribe_url }}" style="color:#666">Unsubscribe (one-click)</a>
-      · Issue: {{ report.edition_id }}
-      · Signal taxonomy: <a href="https://github.com/Independent-AI-Labs/polymarket-insider-tracker/blob/main/docs/SPEC-MARKET-SIGNALS.md" style="color:#666">docs/SPEC-MARKET-SIGNALS.md</a>
+      <a href="{{ unsubscribe_url }}" style="color:#888">Unsubscribe (one-click)</a>
+      · {{ report.edition_id }}
+      · <a href="https://github.com/Independent-AI-Labs/polymarket-insider-tracker/blob/main/docs/SPEC-MARKET-SIGNALS.md" style="color:#888">taxonomy</a>
     </p>
   </div>
 
