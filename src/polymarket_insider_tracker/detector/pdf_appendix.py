@@ -119,12 +119,77 @@ def _render_html(report: DailyReport) -> str:
     ]
     parts.append(_cover(report))
     parts.append(_headline(report))
+    parts.append(_cross_signal_tier(report))
     parts.append(_by_market_log(report))
     parts.append(_top_markets_by_flagged(report))
     parts.append(_glossary(report))
     parts.append(_footer(report))
     parts.append("</body></html>")
     return "\n".join(parts)
+
+
+def _cross_signal_tier(report: DailyReport) -> str:
+    """Top tier of the PDF — markets where ≥ 2 signal categories fired.
+
+    This is what M. actually reads. Single-signal hits move to the
+    log below; the cross-signal tier is the "pay attention" list.
+    """
+    promoted = getattr(report, "promoted_markets", None) or []
+    if not promoted:
+        return (
+            '<h2>Cross-signal markets</h2>'
+            '<p class="muted">No market fired ≥ 2 distinct signal '
+            'categories this window. Single-signal hits are in the '
+            'log below — treat them as informational, not as a buy '
+            'recommendation.</p>'
+        )
+    parts = [
+        '<h2>Cross-signal markets</h2>',
+        '<p class="sub">Markets where ≥ 2 distinct signal categories '
+        'fired. These are the "multiple lenses agree" cases — '
+        'everything below this tier is a single-signal hit.</p>',
+    ]
+    for p in promoted:
+        title_html = (
+            f'<a href="{p.market_url}">{p.market_title}</a>'
+            if p.market_url else p.market_title
+        )
+        tags = " ".join(
+            f'<span class="signal-tag">{s}</span>' for s in p.signal_names
+        )
+        parts.append(
+            f'<h3>{title_html} {tags}</h3>'
+            f'<p class="muted">Categories firing: '
+            f'{", ".join(p.categories)} · Combined notional: '
+            f'${p.total_notional:,.0f}</p>'
+        )
+        parts.append(
+            '<table><thead><tr>'
+            '<th>Signal</th><th>Wallet / contributors</th>'
+            '<th>Side</th><th class="num">Notional</th><th>Detail</th>'
+            '</tr></thead><tbody>'
+        )
+        for h in p.hit_details:
+            row = h["row"]
+            wallet = row.get("wallet_display", "")
+            wallet_url = row.get("wallet_url", "")
+            if wallet and wallet_url:
+                wallet_cell = f'<a href="{wallet_url}" class="mono">{wallet}</a>'
+            else:
+                # Market-level signal — fall back to top_wallets_fmt.
+                wallet_cell = row.get("top_wallets_fmt", "—") or "—"
+            extra = _row_extra(row, h["signal_id"])
+            parts.append(
+                f'<tr>'
+                f'<td class="tag">{h["signal_name"]}</td>'
+                f'<td>{wallet_cell}</td>'
+                f'<td>{row.get("side", "") or "—"}</td>'
+                f'<td class="num">{_row_notional(row)}</td>'
+                f'<td>{extra}</td>'
+                f'</tr>'
+            )
+        parts.append("</tbody></table>")
+    return "".join(parts)
 
 
 def _cover(report: DailyReport) -> str:
@@ -163,19 +228,21 @@ def _by_market_log(report: DailyReport) -> str:
     A market that appears in multiple signal sections shows up
     ONCE with all its hits consolidated + every signal tag listed.
     """
+    # Canonicalise on `market_id` (lowercase conditionId). Prior
+    # versions keyed on market_url-or-title and double-counted the
+    # same market under two slightly-different row shapes.
     by_market: dict[str, dict[str, Any]] = {}
     for section in report.sections:
         signal_id = section.signal_id
         signal_name = section.title
         for row in section.rows:
-            # Rows from market-level signals have market_title in the
-            # row but empty wallet; wallet-level signals have both.
-            mkey = row.get("market_url") or row.get("market_title", "")
-            if not mkey:
+            mid = (row.get("market_id") or "").lower()
+            if not mid:
                 continue
             entry = by_market.setdefault(
-                mkey,
+                mid,
                 {
+                    "market_id": mid,
                     "title": row.get("market_title", ""),
                     "url": row.get("market_url", ""),
                     "signals": set(),
@@ -183,6 +250,12 @@ def _by_market_log(report: DailyReport) -> str:
                     "total_notional": 0.0,
                 },
             )
+            # Keep the first non-empty title/url we see (they should
+            # all agree, but be defensive).
+            if not entry["title"] and row.get("market_title"):
+                entry["title"] = row.get("market_title")
+            if not entry["url"] and row.get("market_url"):
+                entry["url"] = row.get("market_url")
             entry["signals"].add(signal_name)
             notional = (
                 row.get("notional")
@@ -191,12 +264,24 @@ def _by_market_log(report: DailyReport) -> str:
                 or row.get("volume_24h")
                 or 0
             )
-            entry["total_notional"] += float(abs(notional))
+            try:
+                entry["total_notional"] += float(abs(notional))
+            except (TypeError, ValueError):
+                pass
+            # Pick wallet display — use explicit wallet_display on
+            # wallet-level rows, fall back to top_wallets_fmt on
+            # market-level rows.
+            wallet = row.get("wallet_display", "")
+            wallet_url = row.get("wallet_url", "")
+            if not wallet:
+                wallet = row.get("top_wallets_fmt", "") or "—"
+                wallet_url = ""
             entry["rows"].append(
                 {
                     "signal": signal_name,
-                    "wallet": row.get("wallet_display", ""),
-                    "wallet_url": row.get("wallet_url", ""),
+                    "signal_id": signal_id,
+                    "wallet": wallet,
+                    "wallet_url": wallet_url,
                     "side": row.get("side", ""),
                     "notional_fmt": _row_notional(row),
                     "extra": _row_extra(row, signal_id),
@@ -293,12 +378,14 @@ def _top_markets_by_flagged(report: DailyReport) -> str:
     )
     for section in report.sections:
         for row in section.rows:
-            mkey = row.get("market_url") or row.get("market_title", "")
-            if not mkey:
+            mid = (row.get("market_id") or "").lower()
+            if not mid:
                 continue
-            slot = totals[mkey]
-            slot["title"] = row.get("market_title", "")
-            slot["url"] = row.get("market_url", "")
+            slot = totals[mid]
+            if not slot["title"]:
+                slot["title"] = row.get("market_title", "")
+            if not slot["url"]:
+                slot["url"] = row.get("market_url", "")
             slot["signals"].add(section.title)
             notional = (
                 row.get("notional")
@@ -307,7 +394,10 @@ def _top_markets_by_flagged(report: DailyReport) -> str:
                 or row.get("volume_24h")
                 or 0
             )
-            slot["notional"] += float(abs(notional))
+            try:
+                slot["notional"] += float(abs(notional))
+            except (TypeError, ValueError):
+                pass
 
     ordered = sorted(totals.values(), key=lambda r: r["notional"], reverse=True)[:20]
     if not ordered:
