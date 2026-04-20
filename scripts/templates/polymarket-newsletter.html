@@ -1,9 +1,5 @@
-{# Polymarket newsletter — Tera template.                                     #}
-{# Consumed by himalaya batch send; row context lives under `report.*`.       #}
-{# The Python side (build_targets_data) pre-slices arrays and pre-renders     #}
-{# `**bold**` markers into <strong> spans so the template stays straight      #}
-{# iterator logic.                                                            #}
-{% set s = report.config.email.style %}
+<#part type=text/html>
+{% set s = report.config.email.style -%}
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"></head>
@@ -85,3 +81,4 @@
 </div>
 </body>
 </html>
+<#/part>

@@ -16,7 +16,7 @@
 - **{{ key }}**: {{ value }}
 {% endfor %}
 {% for section in sections %}
-## {{ loop.index }}. {{ section.title }}
+## {{ section.title }}
 
 | # | {% for col in config.columns %}{{ col.header }} | {% endfor %}
 
@@ -27,10 +27,12 @@
 
 {% endfor %}
 {% endfor %}
-## Notable Observations
+{% if observations %}
+## Observations
 
 {% for obs in observations -%}
 - {{ obs }}
 {% endfor %}
+{% endif %}
 ---
-*Data source: Polymarket Gamma API*
+*Data source: Polymarket Gamma API. Signal taxonomy: docs/SPEC-MARKET-SIGNALS.md*

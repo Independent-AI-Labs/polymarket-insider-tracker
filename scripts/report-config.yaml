@@ -12,30 +12,16 @@ api:
 # Available order fields: volume24hr, volume, liquidityClob, startDate, endDate
 # Each section fetches from: {base_url}/markets?limit={limit}&order={order}&ascending={ascending}&active={active}
 sections:
+  # Phase S0: retired three non-signal sections per
+  # docs/SPEC-MARKET-SIGNALS.md § 6. Kept only 24h volume as an
+  # interim table until the Phase S3 PDF rewrite (flagged-activity
+  # log, Option B) replaces this entirely. See
+  # docs/IMPLEMENTATION-PLAN-SIGNALS.md.
   - title: "Top Markets by 24-Hour Volume"
     order: volume24hr
     ascending: false
     active: true
     limit: 20
-
-  - title: "Top Markets by Liquidity"
-    order: liquidityClob
-    ascending: false
-    active: true
-    limit: 20
-
-  - title: "Recently Created Markets"
-    order: startDate
-    ascending: false
-    active: true
-    limit: 15
-
-  - title: "Markets Closing Soon"
-    order: endDate
-    ascending: true
-    active: true
-    closed: false
-    limit: 15
 
 # ── Table columns — controls which fields appear in markdown tables ──────────
 # Available fields: question, volume24hr, volume, liquidityClob, bestBid, bestAsk, endDate
@@ -59,24 +45,21 @@ columns:
     header: "End Date"
     format: date
 
-# ── Observation rules — auto-detect interesting patterns ─────────────────────
-observations:
-  # Flag markets where 24h volume is N times greater than liquidity
-  thin_book:
-    enabled: true
-    min_ratio: 8
-    scan_top_n: 10           # only check top N by volume
-    section: 0               # index into sections[] to scan
-
-  # Flag markets trading near 0 or 1 (resolved/near-certain)
-  near_certain:
-    enabled: true
-    low_threshold: 0.05
-    high_threshold: 0.92
-    scan_top_n: 10
-    section: 0
-    # Skip sports markets by keyword
-    skip_keywords: ["vs.", "o/u", "spread", "over/under"]
+# ── Observation rules ────────────────────────────────────────────────────────
+# Phase S0: retired both legacy observation rules per
+# docs/SPEC-MARKET-SIGNALS.md § 6.
+#
+# - `near_certain` is not a signal — a market trading at 0.003 has
+#   already priced in its outcome; there's no informational content
+#   left. Subscribers asked M. (advisor persona) what it means and
+#   could not answer.
+# - `thin_book` ratio is a *gate* for other signals (02-A OFI,
+#   02-D price-impact), not a signal on its own. See signal 03-D.
+#
+# The signal-led daily populates meaningful observations at run
+# time — it does not read this block. This block stays empty for
+# future use (e.g. a pipeline-status observation).
+observations: {}
 
 # ── Email content ────────────────────────────────────────────────────────────
 # Sender identity lives in himalaya's account config now — see
@@ -113,10 +96,10 @@ email:
 pdf:
   engine: wkhtmltopdf        # pandoc --pdf-engine value
   margins:
-    top: 15
-    bottom: 15
-    left: 12
-    right: 12
+    top: 8
+    bottom: 8
+    left: 8
+    right: 8
 
 # ── Delivery ────────────────────────────────────────────────────────────────
 # SMTP host / port / sender live in himalaya's TOML config under the account

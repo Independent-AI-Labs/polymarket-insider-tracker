@@ -49,6 +49,24 @@ def fetch_json(url: str, cfg: dict) -> list | dict:
         return json.loads(resp.read())
 
 
+def _market_is_live(raw: dict) -> bool:
+    """Gamma sometimes flags past-end-date markets as active=true. The
+    Hezbollah ceasefire market kept showing in "near-certain" two days
+    after it ended because of this. Belt-and-braces: exclude anything
+    with closed=true OR endDate already in the past.
+    """
+    if bool(raw.get("closed")) is True:
+        return False
+    end_raw = str(raw.get("endDate", "") or raw.get("endDateIso", "") or "")
+    if not end_raw:
+        return True
+    try:
+        end_dt = datetime.fromisoformat(end_raw.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    return end_dt > datetime.now(timezone.utc)
+
+
 def fetch_sections(cfg: dict) -> list[dict]:
     """Fetch market data for each configured section."""
     base_url = cfg["api"]["base_url"]
@@ -56,7 +74,9 @@ def fetch_sections(cfg: dict) -> list[dict]:
 
     for section_cfg in cfg["sections"]:
         params = {
-            "limit": section_cfg.get("limit", 20),
+            # Over-fetch, then post-filter to `limit` live markets, so
+            # past-end-date stragglers don't steal slots from real ones.
+            "limit": section_cfg.get("limit", 20) * 2,
             "order": section_cfg["order"],
             "ascending": str(section_cfg.get("ascending", False)).lower(),
             "active": str(section_cfg.get("active", True)).lower(),
@@ -67,15 +87,20 @@ def fetch_sections(cfg: dict) -> list[dict]:
         query = "&".join(f"{k}={v}" for k, v in params.items())
         url = f"{base_url}/markets?{query}"
 
-        print(f"  Fetching: {section_cfg['title']} ({params['limit']} markets)...")
+        print(f"  Fetching: {section_cfg['title']} ({section_cfg.get('limit', 20)} markets)...")
         raw_markets = fetch_json(url, cfg)
 
         # Format each market row according to column config
+        target_limit = section_cfg.get("limit", 20)
         markets = []
         for m in raw_markets:
+            if not _market_is_live(m):
+                continue
             row = format_market_row(m, cfg["columns"])
             row["_raw"] = m  # keep raw data for observation rules
             markets.append(row)
+            if len(markets) >= target_limit:
+                break
 
         sections.append({
             "title": section_cfg["title"],
@@ -121,7 +146,19 @@ def format_market_row(m: dict, columns: list[dict]) -> dict:
             max_w = col.get("max_width")
             if max_w and len(str(val)) > max_w:
                 val = str(val)[: max_w - 3] + "..."
-            row[header] = str(val)
+            # Hyperlink the question column to the market page so the
+            # PDF readers' clicks land somewhere useful. `slug` is on
+            # every gamma-api market response.
+            if field == "question":
+                slug = m.get("slug") or ""
+                if slug:
+                    # Escape pipes + brackets that would break the markdown table.
+                    safe = str(val).replace("|", "\\|").replace("[", "(").replace("]", ")")
+                    row[header] = f"[{safe}](https://polymarket.com/event/{slug})"
+                else:
+                    row[header] = str(val)
+            else:
+                row[header] = str(val)
 
     return row
 
@@ -130,43 +167,16 @@ def format_market_row(m: dict, columns: list[dict]) -> dict:
 
 
 def generate_observations(sections: list[dict], cfg: dict) -> list[str]:
-    """Auto-detect interesting patterns based on observation rules."""
-    obs_cfg = cfg.get("observations", {})
-    observations: list[str] = []
+    """Auto-detect interesting patterns.
 
-    # Thin book detection
-    tb = obs_cfg.get("thin_book", {})
-    if tb.get("enabled") and len(sections) > tb.get("section", 0):
-        section = sections[tb["section"]]
-        for m in section["markets"][: tb.get("scan_top_n", 10)]:
-            raw = m["_raw"]
-            vol = float(raw.get("volume24hr", 0) or 0)
-            liq = float(raw.get("liquidityClob", 0) or 0)
-            if liq > 0 and vol / liq > tb.get("min_ratio", 8):
-                q = (raw.get("question") or "?")[:60]
-                observations.append(
-                    f'**Thin book**: "{q}" — {fmt_usd(vol)} 24h vol vs '
-                    f"{fmt_usd(liq)} liquidity ({vol / liq:.0f}x ratio)"
-                )
-
-    # Near-certain detection
-    nc = obs_cfg.get("near_certain", {})
-    if nc.get("enabled") and len(sections) > nc.get("section", 0):
-        section = sections[nc["section"]]
-        skip_kw = [kw.lower() for kw in nc.get("skip_keywords", [])]
-        for m in section["markets"][: nc.get("scan_top_n", 10)]:
-            raw = m["_raw"]
-            bid = float(raw.get("bestBid", 0.5) or 0.5)
-            vol = float(raw.get("volume24hr", 0) or 0)
-            q = raw.get("question", "")
-            if any(kw in q.lower() for kw in skip_kw):
-                continue
-            if bid > nc.get("high_threshold", 0.92) or bid < nc.get("low_threshold", 0.05):
-                observations.append(
-                    f'**Near-certain ({bid:.3f})**: "{q[:60]}" — {fmt_usd(vol)} 24h vol'
-                )
-
-    return observations
+    Phase S0 retired the `thin_book` and `near_certain` rules per
+    docs/SPEC-MARKET-SIGNALS.md § 6. The signal-led daily
+    (scripts/newsletter-daily.py) carries the real signals; the
+    PDF generated from this file is a vestigial 24 h volume
+    snapshot until Phase S3 replaces it with the Option-B
+    flagged-activity-log appendix.
+    """
+    return []
 
 
 # ── Summary stats ────────────────────────────────────────────────────────────
@@ -178,15 +188,13 @@ def compute_stats(sections: list[dict]) -> dict[str, str]:
 
     if len(sections) > 0:
         vol_markets = sections[0]["markets"]
+        n = len(vol_markets)
         total_24h = sum(float(m["_raw"].get("volume24hr", 0) or 0) for m in vol_markets)
         total_vol = sum(float(m["_raw"].get("volume", 0) or 0) for m in vol_markets)
-        stats["Top-N 24h volume total"] = fmt_usd(total_24h)
-        stats["Top-N all-time volume total"] = fmt_usd(total_vol)
-
-    if len(sections) > 1:
-        liq_markets = sections[1]["markets"]
-        total_liq = sum(float(m["_raw"].get("liquidityClob", 0) or 0) for m in liq_markets)
-        stats["Top-N liquidity total"] = fmt_usd(total_liq)
+        total_liq = sum(float(m["_raw"].get("liquidityClob", 0) or 0) for m in vol_markets)
+        stats[f"24h volume (top {n} markets)"] = fmt_usd(total_24h)
+        stats[f"All-time volume (top {n} markets)"] = fmt_usd(total_vol)
+        stats[f"Book liquidity (top {n} markets)"] = fmt_usd(total_liq)
 
     return stats
 
@@ -209,24 +217,101 @@ def render_template(template_name: str, ctx: dict, templates_dir: Path) -> str:
 
 
 def convert_to_pdf(md_path: Path, pdf_path: Path, cfg: dict) -> None:
+    """Markdown → PDF.
+
+    Earlier attempts went through pandoc's default wkhtmltopdf path,
+    which wraps the content in a verbose HTML template (big title
+    block, generous body padding, no table-header repetition on page
+    breaks). The padding was what made the PDF look like a letter on
+    A3 paper and column headers got re-drawn per page — except without
+    `thead-as-header-group` the first row of each new page overlapped
+    where the header SHOULD have been.
+
+    This path renders markdown → HTML fragment via pandoc, wraps it
+    in a minimal HTML shell with our own CSS (including the critical
+    `thead { display: table-header-group }` that tells wkhtmltopdf to
+    repeat headers on every page), and hands the HTML straight to
+    wkhtmltopdf with explicit `--margin-*` args.
+    """
     pdf_cfg = cfg.get("pdf", {})
     margins = pdf_cfg.get("margins", {})
-    engine = pdf_cfg.get("engine", "wkhtmltopdf")
 
-    cmd = [
-        "pandoc", str(md_path),
-        "-o", str(pdf_path),
-        f"--pdf-engine={engine}",
-        f"--metadata=title:{md_path.stem}",
-        f"-V", f"margin-top={margins.get('top', 15)}",
-        f"-V", f"margin-bottom={margins.get('bottom', 15)}",
-        f"-V", f"margin-left={margins.get('left', 12)}",
-        f"-V", f"margin-right={margins.get('right', 12)}",
-    ]
+    # 1. Markdown → HTML fragment. `--to html5` without `-s` (standalone)
+    #    gives us just the body content with no template wrapping.
+    frag_result = subprocess.run(
+        ["pandoc", str(md_path), "--to", "html5"],
+        capture_output=True, text=True,
+    )
+    if frag_result.returncode != 0:
+        raise RuntimeError(f"pandoc html fragment failed: {frag_result.stderr}")
+    html_fragment = frag_result.stdout
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(f"pandoc failed: {result.stderr}")
+    # 2. Wrap with minimal shell + CSS.
+    css = """
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-size: 10pt;
+        color: #111;
+        line-height: 1.4;
+      }
+      h1 { font-size: 18pt; margin: 0 0 8pt; }
+      h2 { font-size: 13pt; margin: 14pt 0 6pt; border-bottom: 1px solid #ccc; padding-bottom: 3pt; }
+      p { margin: 4pt 0; }
+      em { color: #666; font-style: italic; }
+      a { color: #1a5fb4; text-decoration: none; }
+      ul { margin: 4pt 0 4pt 18pt; padding: 0; }
+      li { margin: 2pt 0; }
+      table { width: 100%; border-collapse: collapse; margin: 6pt 0 10pt; font-size: 9pt; }
+      th, td { padding: 4pt 6pt; border-bottom: 1px solid #ddd; text-align: left; }
+      th { background: #f4f4f4; font-weight: 600; color: #333; }
+      td { color: #222; }
+      /* Repeat table headers across page breaks — this is the fix
+         for "row text overlapping column headers on new pages". */
+      thead { display: table-header-group; }
+      tr, td, th { page-break-inside: avoid; }
+      tr { page-break-after: auto; }
+    """.strip()
+
+    html_doc = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><style>{css}</style></head>
+<body>
+{html_fragment}
+</body>
+</html>
+"""
+
+    import tempfile
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".html", prefix="snapshot-", delete=False
+    ) as fh:
+        fh.write(html_doc)
+        html_path = Path(fh.name)
+
+    try:
+        cmd = [
+            "wkhtmltopdf",
+            "--quiet",
+            "--enable-local-file-access",
+            "--margin-top", f"{margins.get('top', 8)}mm",
+            "--margin-bottom", f"{margins.get('bottom', 8)}mm",
+            "--margin-left", f"{margins.get('left', 8)}mm",
+            "--margin-right", f"{margins.get('right', 8)}mm",
+            "--page-size", "A4",
+            "--encoding", "utf-8",
+            str(html_path),
+            str(pdf_path),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"wkhtmltopdf failed (rc={result.returncode}): "
+                f"{result.stderr or result.stdout}"
+            )
+    finally:
+        html_path.unlink(missing_ok=True)
 
 
 # ── Email delivery (via himalaya batch send) ─────────────────────────────────
