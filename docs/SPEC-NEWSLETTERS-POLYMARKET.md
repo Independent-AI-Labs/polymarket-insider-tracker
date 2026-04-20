@@ -97,13 +97,16 @@ existing `partials/unsubscribe_footer.html`.
 - **Gmail clip threshold is 102 KB** — daily and weekly bodies
   MUST render under that. Monthly MAY exceed and rely on the PDF.
 
-### 3.4 Delivery mechanics
+### 3.4 Delivery mechanics (summary — authoritative detail in § 10)
 
 Each cadence script (`daily.py / weekly.py / monthly.py` under
 `scripts/newsletters/`, sharing `_common.py`) drives
 `himalaya batch send` via
 `newsletter_common.deliver_via_himalaya(...)`. Rate defaults to
-`2/min` (= 120/hr) per REQ-MAIL-127.
+`2/min` (= 120/hr) per REQ-MAIL-127. Scheduler, failure handling,
+secrets posture, canary flow, and monitoring are all pinned down
+in § 10 below — this sub-section only exists so operators
+skimming the cadence chapters know where to look for the rest.
 
 ---
 
@@ -510,12 +513,225 @@ template.
 
 ---
 
-## 10. Implementation ordering
+## 10. Operations
 
-Implementation split into three phases, each independently
+Authoritative source for *how* the newsletters actually run in
+production. Every operator-facing mechanic — scheduler,
+pre-flight gates, secrets, canary, monitoring — lives here.
+
+### 10.1 Scheduler
+
+**Choice: `ami-cron`.** Rationale:
+
+- Installed at `~/AMI-AGENTS/.boot-linux/bin/ami-cron`, wraps the
+  user crontab with labels + idempotent `add` / `remove`.
+- Injects `AMI_ROOT` + PATH so scripts find `himalaya`, `uv`,
+  `wkhtmltopdf` without per-job environment boilerplate.
+- Supports `ami-cron status <label>` for last-run telemetry.
+
+systemd user timers are a viable alternative but would need
+`loginctl enable-linger ami` for post-logout persistence plus
+one unit-pair per cadence. No upside over ami-cron for this
+workload — explicitly rejected.
+
+### 10.2 Schedules (UTC)
+
+| Cadence | Cron spec | ami-cron label | Command |
+|---|---|---|---|
+| daily   | `0 13 * * *` | `polymarket-daily`   | `cd $AMI_ROOT/projects/polymarket-insider-tracker && make newsletter-daily` |
+| weekly  | `0 8 * * 1`  | `polymarket-weekly`  | `cd $AMI_ROOT/projects/polymarket-insider-tracker && make newsletter-weekly` |
+| monthly | `0 9 1 * *`  | `polymarket-monthly` | `cd $AMI_ROOT/projects/polymarket-insider-tracker && make newsletter-monthly` |
+
+Wiring commands (idempotent — safe to re-run):
+
+```bash
+ami-cron add "0 13 * * *" \
+  "cd $AMI_ROOT/projects/polymarket-insider-tracker && make newsletter-daily" \
+  --label polymarket-daily
+
+ami-cron add "0 8 * * 1" \
+  "cd $AMI_ROOT/projects/polymarket-insider-tracker && make newsletter-weekly" \
+  --label polymarket-weekly
+
+ami-cron add "0 9 1 * *" \
+  "cd $AMI_ROOT/projects/polymarket-insider-tracker && make newsletter-monthly" \
+  --label polymarket-monthly
+```
+
+Schedules MAY shift on operator request; the table above is the
+default and any deviation MUST be recorded in the audit log
+(§ 14).
+
+### 10.3 Pre-flight gates
+
+Each cadence's `make` target runs these gates **in order**
+before touching `himalaya`. Any gate failing short-circuits the
+run with a non-zero exit, which ami-cron surfaces to the
+monitoring channel (§ 10.9).
+
+1. **DNS probe.** `python3 scripts/dns-probe-patch.py --quiet`
+   — exits non-zero if any Polymarket hostname is hijacked.
+   Rationale: without gamma + data-api the data builder ships
+   empty content.
+2. **Database reachable.** Quick `SELECT 1` via the async
+   engine. Migrations are NOT auto-applied in production — a
+   pending-migration state is a human problem.
+3. **Himalaya account loaded.** `himalaya account list` must
+   name `polymarket`. Missing means the config file at
+   `~/.config/himalaya/config.toml` wasn't installed.
+4. **Send-domain DNS sanity.** `dig +short TXT <sending-domain>`
+   returns SPF + DKIM + DMARC records (REQ-MAIL-122 / 123 / 124).
+   Missing is a soft-fail for the canary period (log WARN), hard
+   fail once we open to the public subscriber list.
+5. **Ledger reachable.** Query `email_deliveries` for the
+   planned `edition_id`. If any row is already `outcome='sent'`,
+   the per-row idempotency filter in § 7.5 drops it; if ALL rows
+   are already sent, the run exits 0 with an INFO log (nothing
+   to do — a re-trigger after success, not an error).
+
+### 10.4 Data-builder lifecycle
+
+Newsletters are **pure readers** of persisted Postgres state.
+They do not run captures, replays, or detector passes. The
+production pipeline (separate systemd service `polymarket-pipeline`
+or ami-cron job — see `docs/RUNBOOK.md`) populates
+`alert_daily_rollup`, `sniper_clusters`, `wallet_profiles`,
+`funding_transfers` continuously. If the pipeline is down, the
+newsletter still ships — with whatever data is there — and the
+body honestly reflects the gap ("no alerts this window").
+
+**Explicit anti-pattern:** the cadence scripts MUST NOT block on
+a fresh capture + replay. A newsletter that refuses to ship
+because upstream ingestion stalled is worse than a newsletter
+that ships with a stale window; the first fails silently, the
+second tells the reader something is wrong.
+
+### 10.5 Himalaya account + secrets
+
+Account config lives at `config/himalaya-account-polymarket.toml`
+in the repo and is installed by a dedicated Makefile target:
+
+```bash
+make install-himalaya-account
+# → cp config/himalaya-account-polymarket.toml ~/.config/himalaya/config.toml
+```
+
+The config's SMTP stanza points at the LAN exim-relay
+(`192.168.50.66:2526`, unauthenticated per relay policy). The
+`auth.raw` field carries a throwaway password that the relay
+ignores but himalaya requires syntactically. No real secret is
+stored in the repo.
+
+**If the relay moves to the public internet,** the config must
+switch to `auth.type = "keyring"` with the credential stored
+via `himalaya account configure polymarket`. Repo-committed
+passwords are forbidden.
+
+### 10.6 Canary period
+
+Before opening the public signup form (Phase F §6.2), **every
+cadence runs for 14 consecutive days with the targets list
+restricted to**:
+
+```yaml
+delivery:
+  targets:
+    - name: "archive"
+      email: "archive+polymarket@ami-mail.example"
+      enabled: true
+```
+
+During canary, an operator reviews the archive inbox after each
+run. Sign-off criteria:
+
+- Subject line renders correctly across Gmail web, Gmail
+  Android, Outlook web, Apple Mail.
+- List-Unsubscribe header produces a one-click unsubscribe UI
+  in Gmail's inbox list.
+- mail-tester.com score ≥ 9/10 on the canary send.
+- No DMARC failures in the sending domain's `rua` inbox for
+  seven consecutive days.
+
+Only after these are met is the public subscriber list enabled
+by flipping `delivery.use_db_subscribers = true` in
+`report-config.yaml`.
+
+### 10.7 Failure + retry behavior
+
+**Cadence-level failures** (DB down, gamma API timeout, etc.):
+
+- ami-cron captures stderr and exits non-zero.
+- The monitoring job (§ 10.9) sees the failure and pages.
+- Operator re-runs the cadence manually via `make
+  newsletter-{cadence}`. Idempotency (§ 7.5) ensures already-sent
+  rows aren't re-mailed.
+
+**Per-recipient failures** (himalaya reports `outcome='failed'`
+for one row):
+
+- Ledger row written with the relay response string.
+- Next scheduled cadence run does NOT auto-retry failed rows —
+  a failed send is usually a subscriber-side problem (bounced,
+  suppressed), and REQ-MAIL-115 says after three hard bounces
+  the subscriber flips to `bounced` status and is dropped from
+  future sends.
+- For transient failures, an operator can force a retry with
+  `make newsletter-daily TARGETS=<email>` — the CLI takes a
+  subset.
+
+**Hard rule:** we never auto-retry a send inside the same
+cadence run. Retries happen either by manual operator action or
+by the next scheduled occurrence. This keeps the blast radius
+of a runaway loop bounded.
+
+### 10.8 Boot persistence
+
+`ami-cron` writes to the user crontab, which survives reboots
+for user `ami` because the Ubuntu host keeps the
+`crond` / `cron` service running at boot. No `enable-linger`
+required.
+
+If the host is down at the scheduled firing time, that
+firing is missed and the next scheduled firing takes over — we
+do NOT attempt to "catch up" missed runs. The missed edition
+can be manually triggered via `make newsletter-daily DATE=YYYY-MM-DD`
+if the operator chooses.
+
+### 10.9 Monitoring + paging
+
+- **Success path:** each cadence writes a summary line to
+  stdout (captured by ami-cron → syslog). No explicit pager.
+- **Failure path:** ami-cron's built-in failure capture emits
+  to syslog with facility `cron.err`. A separate observer
+  (outside this repo — lives in `AMI-STREAMS/ansible/roles/ami_mail/`)
+  tails syslog for `polymarket-*` labels and posts to the
+  operator's monitoring channel on three consecutive failures
+  OR one `outcome='failed'` ratio > 20 %.
+- **No on-call rotation.** This is a single-operator product;
+  the one operator is the pager target. Adding rotation is
+  future work.
+
+### 10.10 Secrets inventory
+
+| Secret | Where it lives | How it's read |
+|---|---|---|
+| Database password | `.env` → `DATABASE_URL` | `pydantic-settings` at startup |
+| Polymarket API creds | `.env` → `POLYMARKET_API_*` (optional) | idem |
+| Himalaya SMTP password | `~/.config/himalaya/config.toml` (LAN relay — throwaway; migrates to keyring if relay goes public) | himalaya binary |
+| Subscriber `unsubscribe_token` | Postgres `subscribers.unsubscribe_token` | data-file per batch send |
+| DKIM private key | `/etc/exim4/dkim/newsletter.key` on the relay | exim signer config |
+
+`.env` is gitignored (§ .gitignore line 74). Any secret outside
+this table is a violation and should be flagged to the operator.
+
+---
+
+## 11. Implementation ordering
+
+Implementation split into four phases, each independently
 deliverable:
 
-### 10.1 Phase N1 — Daily hardening (ready to ship)
+### 11.1 Phase N1 — Daily hardening (ready to ship)
 
 - Retire `send-report.py`'s current top-markets-by-volume
   content in favour of the alert-led body defined in § 4.
@@ -525,38 +741,43 @@ deliverable:
   template matching § 4.2.
 - Emit `alerts-{date}.csv`; retain `snapshot-{date}.pdf` as
   demoted attachment.
+- Add `make newsletter-daily` wired to pre-flight gates
+  (§ 10.3).
 - Scenario test: given a synthetic 24 h alert window, the
   rendered HTML + CSV match golden snapshots.
 
-### 10.2 Phase N2 — Weekly (deliverable once N1 + `price_at_flag` persistence)
+### 11.2 Phase N2 — Weekly (deliverable once N1 + `price_at_flag` persistence)
 
 - `WeeklyDataBuilder` producing the five § 5.2 sections.
 - `scripts/templates/polymarket-weekly.html` Tera template.
 - "Aged callouts" price re-fetch helper against Gamma API.
+- Add `make newsletter-weekly`.
 - Scenario test: golden-file the Mon-08:00 render for a
   synthetic week.
 
-### 10.3 Phase N3 — Monthly (deliverable once N2 + pydot)
+### 11.3 Phase N3 — Monthly (deliverable once N2 + pydot)
 
 - `MonthlyDataBuilder` for the six § 6.2 sections.
 - `scripts/templates/polymarket-monthly.html` Tera template.
 - `render_cluster_graph()` helper using pydot → PNG.
 - Signal co-occurrence + frequency charts via inline SVG.
+- Add `make newsletter-monthly`.
 - Scenario test: the full 30-day synthetic month renders
   deterministically (graph layout must be seeded for
   repro).
 
-### 10.4 Phase N4 — Cutover
+### 11.4 Phase N4 — Cutover
 
 - Switch `scripts/send-report.py` to dispatch
   `send-report.py {daily, weekly, monthly}`.
-- Wire ami-cron schedules per § 4.1 / 5.1 / 6.1.
-- Run a 14-day canary to a single archive address before
-  opening the public signup form.
+- Wire ami-cron schedules per § 10.2.
+- Run the 14-day canary per § 10.6 to the archive address.
+- Flip `delivery.use_db_subscribers = true` only after canary
+  sign-off.
 
 ---
 
-## 11. Acceptance criteria
+## 12. Acceptance criteria
 
 A cadence is considered shipped when all of the following are
 true:
@@ -573,10 +794,14 @@ true:
 - The "honesty note" in the weekly (§ 5.2.5) and monthly
   (§ 6.2.5) headers renders verbatim — no claims drift from
   spec-approved copy.
+- `make newsletter-{cadence}` passes every pre-flight gate in
+  § 10.3 on the production host.
+- `ami-cron list` shows the cadence's label with the schedule
+  from § 10.2.
 
 ---
 
-## 12. Out of scope (explicit)
+## 13. Out of scope (explicit)
 
 - Precision / recall / hit-rate / P&L-uplift numbers anywhere
   in the product. Deferred until outcome scoring ships.
@@ -587,11 +812,18 @@ true:
 - Paid tiers or content gating — everything in every cadence
   goes to every active subscriber who has opted into that
   cadence.
+- Multi-operator on-call rotation (§ 10.9). Single-operator
+  product for now.
 
 ---
 
-## 13. Audit log
+## 14. Audit log
 
 - 2026-04-20 — initial spec drafted by claude-operator +
   reviewed by vlad. Supersedes the inline Phase E sketch in
   `docs/IMPLEMENTATION-TODOS.md`.
+- 2026-04-20 — added § 10 Operations (scheduler, pre-flight
+  gates, canary flow, failure handling, secrets inventory);
+  renumbered §§ 11-14. Driven by vlad's correct observation
+  that the initial draft was content-heavy and
+  operationally thin.
