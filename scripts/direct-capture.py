@@ -35,6 +35,7 @@ import httpx
 
 from polymarket_insider_tracker.backtest.replay import trade_event_to_record
 from polymarket_insider_tracker.config import get_settings
+from polymarket_insider_tracker.ingestor.data_api import DataAPITradePoller
 from polymarket_insider_tracker.ingestor.models import TradeEvent
 from polymarket_insider_tracker.ingestor.websocket import (
     SubscriptionMode,
@@ -127,6 +128,7 @@ async def run(
     duration_seconds: int,
     *,
     market_limit: int,
+    source: str,
 ) -> int:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     count = 0
@@ -153,42 +155,67 @@ async def run(
                 LOG.info("captured %d events (%.0fs elapsed)", count, elapsed)
 
         settings = get_settings()
-        host = settings.polymarket.ws_url
 
-        asset_ids: list[str] = []
-        asset_meta: dict[str, dict[str, str]] = {}
-        mode = (
-            SubscriptionMode.CLOB_MARKET
-            if "/ws/market" in host
-            else SubscriptionMode.ACTIVITY
-        )
-        if mode is SubscriptionMode.CLOB_MARKET:
-            LOG.info("CLOB mode detected (%s) — fetching asset_ids from gamma", host)
-            asset_ids, asset_meta = await _fetch_active_asset_ids(market_limit)
-            if not asset_ids:
-                LOG.error("no asset_ids — CLOB subscription would be empty; aborting")
-                return 2
-
-        handler = TradeStreamHandler(
-            on_trade=on_trade,
-            host=host,
-            mode=mode,
-            asset_ids=asset_ids,
-            asset_id_to_condition=asset_meta,
-        )
-        task = asyncio.create_task(handler.start())
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=duration_seconds)
-        except asyncio.TimeoutError:
-            LOG.info("duration reached (%ds)", duration_seconds)
-        finally:
-            await handler.stop()
-            task.cancel()
+        if source == "data-api":
+            LOG.info("source=data-api — polling data-api.polymarket.com/trades")
+            poller = DataAPITradePoller(on_trade=on_trade)
+            task = asyncio.create_task(poller.start())
             try:
-                await task
-            except (asyncio.CancelledError, Exception) as exc:  # noqa: BLE001
-                if not isinstance(exc, asyncio.CancelledError):
-                    LOG.warning("handler exited with %s", exc)
+                await asyncio.wait_for(stop_event.wait(), timeout=duration_seconds)
+            except asyncio.TimeoutError:
+                LOG.info("duration reached (%ds)", duration_seconds)
+            finally:
+                await poller.stop()
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception) as exc:  # noqa: BLE001
+                    if not isinstance(exc, asyncio.CancelledError):
+                        LOG.warning("poller exited with %s", exc)
+                LOG.info(
+                    "data-api stats: polls=%d rows=%d emitted=%d dup=%d errors=%d",
+                    poller.stats.polls,
+                    poller.stats.rows_fetched,
+                    poller.stats.trades_emitted,
+                    poller.stats.duplicates_skipped,
+                    poller.stats.http_errors,
+                )
+        else:
+            host = settings.polymarket.ws_url
+            asset_ids: list[str] = []
+            asset_meta: dict[str, dict[str, str]] = {}
+            mode = (
+                SubscriptionMode.CLOB_MARKET
+                if "/ws/market" in host
+                else SubscriptionMode.ACTIVITY
+            )
+            if mode is SubscriptionMode.CLOB_MARKET:
+                LOG.info("CLOB mode detected (%s) — fetching asset_ids from gamma", host)
+                asset_ids, asset_meta = await _fetch_active_asset_ids(market_limit)
+                if not asset_ids:
+                    LOG.error("no asset_ids — CLOB subscription would be empty; aborting")
+                    return 2
+
+            handler = TradeStreamHandler(
+                on_trade=on_trade,
+                host=host,
+                mode=mode,
+                asset_ids=asset_ids,
+                asset_id_to_condition=asset_meta,
+            )
+            task = asyncio.create_task(handler.start())
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=duration_seconds)
+            except asyncio.TimeoutError:
+                LOG.info("duration reached (%ds)", duration_seconds)
+            finally:
+                await handler.stop()
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception) as exc:  # noqa: BLE001
+                    if not isinstance(exc, asyncio.CancelledError):
+                        LOG.warning("handler exited with %s", exc)
 
     LOG.info("captured %d events to %s", count, output_path)
     return 0
@@ -218,6 +245,18 @@ def main(argv: list[str] | None = None) -> int:
             "subscribe. Default 200 markets (~400 asset_ids)."
         ),
     )
+    parser.add_argument(
+        "--source",
+        choices=["clob-ws", "data-api"],
+        default="data-api",
+        help=(
+            "Trade source. `data-api` polls the public /trades REST "
+            "endpoint — slower (~2-5s lag) but carries proxyWallet. "
+            "`clob-ws` uses the CLOB /ws/market channel (sub-second, "
+            "but anonymized). Default data-api since wallets are the "
+            "whole point of insider tracking."
+        ),
+    )
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args(argv)
     logging.basicConfig(
@@ -229,6 +268,7 @@ def main(argv: list[str] | None = None) -> int:
             args.output,
             args.duration,
             market_limit=args.market_limit,
+            source=args.source,
         )
     )
 
