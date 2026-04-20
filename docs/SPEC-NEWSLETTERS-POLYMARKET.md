@@ -22,6 +22,14 @@ market-outcome scoring. Outcome scoring remains a future
 capability; every claim this spec makes about subscriber value
 must be deliverable without it.
 
+**Signal layer:** every claim in the body of every cadence is
+backed by a signal defined in
+[`docs/SPEC-MARKET-SIGNALS.md`](SPEC-MARKET-SIGNALS.md) and its
+per-category specs in `docs/signals/`. This spec describes the
+*product surface*; the signals spec describes *what the product
+reports*. Adding or retiring a signal changes what appears in
+sections below without changing the section layouts.
+
 Non-goals:
 
 - Paid tiers / payment integration.
@@ -827,3 +835,8 @@ true:
   renumbered §§ 11-14. Driven by vlad's correct observation
   that the initial draft was content-heavy and
   operationally thin.
+- 2026-04-20 — linked in the SPEC-MARKET-SIGNALS taxonomy (new
+  § 1 paragraph). Retired the four non-signals from the PDF
+  product per SPEC-MARKET-SIGNALS § 6. Daily PDF is rewritten
+  per `docs/IMPLEMENTATION-PLAN-SIGNALS.md` Phase S3 (Option B
+  — flagged-activity-log appendix).
