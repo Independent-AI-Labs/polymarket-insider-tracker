@@ -48,6 +48,10 @@ from polymarket_insider_tracker.detector.signals.base import (  # noqa: E402
     signal_badges_html,
 )
 from polymarket_insider_tracker.detector.signals import icons as icons_mod  # noqa: E402
+from polymarket_insider_tracker.metrics import (  # noqa: E402
+    MetricsStore,
+    snapshot_from_report,
+)
 
 LOG = logging.getLogger("newsletter-daily")
 
@@ -453,6 +457,23 @@ def main(argv: list[str] | None = None) -> int:
         sum(len(s.rows) for s in report.sections),
         report.headline[:100],
     )
+
+    # Best-effort metrics snapshot — unblocks Phase 3 empirical pruning
+    # by accumulating one typed JSON per edition. A write failure here
+    # must NOT block delivery; log and carry on.
+    try:
+        snapshot = snapshot_from_report(
+            report, source_label=report.source_label
+        )
+        snap_path = MetricsStore().write_snapshot(snapshot)
+        LOG.info(
+            "metrics snapshot written: %s (%d wallets, %d markets)",
+            snap_path,
+            len(snapshot.wallets),
+            len(snapshot.markets),
+        )
+    except Exception:
+        LOG.exception("metrics snapshot persistence failed; continuing")
 
     # Outer attachments — CSV + PDF — these go at the multipart/mixed
     # level, alongside the multipart/related containing the HTML body
