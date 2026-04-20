@@ -73,9 +73,11 @@ class FreshWalletSignal(Signal):
             ColumnSpec("wallet_display", "Wallet", "left", "wallet",
                        link_field="wallet_url"),
             ColumnSpec("market_title", "Market", "left", "text",
-                       link_field="market_url", width_hint="42%"),
+                       link_field="market_url", width_hint="34%"),
             ColumnSpec("side", "Side", "left", "text"),
-            ColumnSpec("notional_fmt", "Notional", "right", "money"),
+            ColumnSpec("market_total_fmt", "Total on market", "right", "money"),
+            ColumnSpec("avg_price_fmt", "Avg price", "right", "text"),
+            ColumnSpec("max_payoff_fmt", "Max payoff", "right", "money"),
             ColumnSpec("first_seen_fmt", "First seen", "right", "duration"),
         ]
 
@@ -83,24 +85,20 @@ class FreshWalletSignal(Signal):
         if not context.trades:
             return []
 
-        # Largest trade per wallet in the window — but gated on
-        # (a) per-trade notional ≥ min_trade_notional
-        # (b) market passes the price / lifespan / novelty gates.
-        by_wallet: dict[str, dict[str, Any]] = {}
+        # For each (wallet, market), aggregate ALL trades in the
+        # window so we can report TOTAL exposure (not just biggest
+        # single fill) + avg price + max payoff. The flagged wallets
+        # are those where a trade ≥ min_trade_notional exists AND
+        # the market passes the gates.
+        by_wm: dict[tuple[str, str], dict[str, Any]] = {}
         for t in context.trades:
             wallet = str(t.get("proxyWallet", "")).lower()
             if not wallet:
                 continue
-            notional = Decimal(str(t.get("size", 0))) * Decimal(
-                str(t.get("price", 0))
-            )
-            if float(notional) < self.min_trade_notional:
-                continue
             mid = str(t.get("conditionId", "")).lower()
+            if not mid:
+                continue
             meta = context.market_meta.get(mid) or {}
-            # Fresh-wallet signal doesn't require the thin-book gate
-            # (it's wallet-level, not a price-impact claim) — but it
-            # DOES require price-band, lifespan and novelty gates.
             if not passes_all(
                 meta,
                 self.gates,
@@ -111,49 +109,91 @@ class FreshWalletSignal(Signal):
                 require_liquidity=False,
             ):
                 continue
-            existing = by_wallet.get(wallet)
-            if existing is None or notional > existing["_notional"]:
-                by_wallet[wallet] = {**t, "_notional": notional}
+            size = Decimal(str(t.get("size", 0)))
+            price = Decimal(str(t.get("price", 0)))
+            notional = size * price
+            key = (wallet, mid)
+            entry = by_wm.setdefault(
+                key,
+                {
+                    "wallet": wallet,
+                    "mid": mid,
+                    "title": str(t.get("title", "")),
+                    "event_slug": str(t.get("eventSlug", "")),
+                    "total_notional": Decimal("0"),
+                    "total_shares": Decimal("0"),
+                    "biggest_trade": Decimal("0"),
+                    "biggest_side": "",
+                    "trade_count": 0,
+                    "ts_first": int(t.get("timestamp", 0)),
+                    "ts_last": int(t.get("timestamp", 0)),
+                },
+            )
+            entry["total_notional"] += notional
+            entry["total_shares"] += size
+            entry["trade_count"] += 1
+            if notional > entry["biggest_trade"]:
+                entry["biggest_trade"] = notional
+                entry["biggest_side"] = str(t.get("side", ""))
+            ts = int(t.get("timestamp", 0))
+            entry["ts_first"] = min(entry["ts_first"], ts)
+            entry["ts_last"] = max(entry["ts_last"], ts)
 
-        if not by_wallet:
+        # Drop (wallet, market) pairs whose biggest trade was below
+        # the min_trade_notional floor.
+        flagged = {
+            k: e for k, e in by_wm.items()
+            if float(e["biggest_trade"]) >= self.min_trade_notional
+        }
+        if not flagged:
             return []
 
-        # Probe Polymarket first-trade for each candidate.
-        candidates = list(by_wallet.keys())
-        first_trades = asyncio.run(
-            _fetch_first_trade_timestamps(candidates)
-        )
+        candidates = list({w for (w, _) in flagged})
+        first_trades = asyncio.run(_fetch_first_trade_timestamps(candidates))
 
         now = context.window_end or datetime.now(UTC)
         cutoff = now - timedelta(days=self.max_days)
 
         hits: list[SignalHit] = []
-        for wallet, trade in by_wallet.items():
+        for (wallet, mid), e in flagged.items():
             first_trade_ts = first_trades.get(wallet)
             if first_trade_ts is None:
                 continue
             if first_trade_ts < cutoff:
                 continue
             days = (now - first_trade_ts).total_seconds() / 86400
-            notional = float(trade["_notional"])
+            total_notional = float(e["total_notional"])
+            total_shares = float(e["total_shares"])
+            avg_price = (total_notional / total_shares) if total_shares > 0 else 0.0
+            # Max payoff on a BUY: total shares × $1 (each share pays
+            # $1 if outcome resolves YES). On a SELL it's the total
+            # cash received; for a short position max loss is shares×$1
+            # so we report the same absolute quantity.
+            max_payoff = total_shares
             hits.append(
                 SignalHit(
                     signal_id=self.id,
                     wallet_address=wallet,
-                    market_id=str(trade.get("conditionId", "")),
-                    market_title=str(trade.get("title", "")),
-                    event_slug=str(trade.get("eventSlug", "")),
+                    market_id=mid,
+                    market_title=e["title"],
+                    event_slug=e["event_slug"],
                     score=min(1.0, 0.5 + 0.5 * (1 - days / self.max_days)),
                     row={
                         "wallet_address": wallet,
                         "wallet_display": _short_wallet(wallet),
                         "wallet_url": f"https://polymarket.com/profile/{wallet}",
-                        "market_id": str(trade.get("conditionId", "")),
-                        "market_title": str(trade.get("title", "")),
-                        "market_url": f"https://polymarket.com/event/{trade.get('eventSlug', '')}",
-                        "side": str(trade.get("side", "")),
-                        "notional": notional,
-                        "notional_fmt": _money(notional),
+                        "market_id": mid,
+                        "market_title": e["title"],
+                        "market_url": f"https://polymarket.com/event/{e['event_slug']}",
+                        "side": e["biggest_side"],
+                        "notional": total_notional,
+                        "notional_fmt": _money(total_notional),
+                        "market_total_fmt": _money(total_notional),
+                        "avg_price": avg_price,
+                        "avg_price_fmt": f"{avg_price:.3f}",
+                        "max_payoff": max_payoff,
+                        "max_payoff_fmt": _money(max_payoff),
+                        "trade_count": e["trade_count"],
                         "first_seen_ts": first_trade_ts.isoformat(),
                         "first_seen_fmt": _fmt_first_seen(days),
                     },

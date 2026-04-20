@@ -34,6 +34,45 @@
     {{ report.headline | safe }}
   </div>
 
+  {% if report.cross_market_wallets %}
+  <div style="padding:20px 24px;border-bottom:1px solid #eee;background:#fff3cd">
+    <h2 style="margin:0 0 4px;font-size:14px;text-transform:uppercase;letter-spacing:0.08em;color:#8a4b00">
+      Cross-market wallets
+    </h2>
+    <p style="margin:0 0 12px;font-size:12px;color:#555;line-height:1.4">
+      Same wallet, multiple flagged markets today. Strongest informed-flow tell we can report without outcome data.
+    </p>
+    <table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead>
+        <tr style="text-align:left;color:#666;border-bottom:1px solid #eee">
+          <th style="padding:8px 8px 8px 0;font-weight:500">Wallet</th>
+          <th style="padding:8px;font-weight:500;text-align:right">Markets</th>
+          <th style="padding:8px;font-weight:500;text-align:right">Total flagged</th>
+          <th style="padding:8px 0 8px 8px;font-weight:500">Appears on</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for w in report.cross_market_wallets %}
+        <tr style="border-bottom:1px solid #f5f5f5">
+          <td style="padding:10px 8px 10px 0;font-family:monospace;font-size:12px">
+            <a href="{{ w.profile_url }}" style="color:#1a5fb4;text-decoration:none">{{ w.address_display }}</a>
+            {% if w.is_fresh %}<span style="background:#fff;color:#8a4b00;padding:1px 5px;border-radius:3px;font-size:10px;margin-left:4px">fresh {{ w.first_seen_fmt }}</span>{% endif %}
+          </td>
+          <td style="padding:10px 8px;text-align:right;font-weight:700">{{ w.market_count }}</td>
+          <td style="padding:10px 8px;text-align:right;font-weight:700">{{ w.total_notional_fmt }}</td>
+          <td style="padding:10px 0 10px 8px;font-size:12px;color:#333;line-height:1.5">
+            {% for m in w.markets %}
+            <a href="{{ m.url }}" style="color:#111;text-decoration:none">{{ m.title }}</a>
+            <span style="color:#888;font-size:11px">· {{ m.signals_fmt }} · {{ m.notional_fmt }}</span><br>
+            {% endfor %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
   {% if report.promoted_markets %}
   <div style="padding:20px 24px;border-bottom:1px solid #eee;background:#fffdf5">
     <h2 style="margin:0 0 4px;font-size:14px;text-transform:uppercase;letter-spacing:0.08em;color:#8a4b00">

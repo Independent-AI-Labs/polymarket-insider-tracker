@@ -33,15 +33,25 @@ from typing import Any
 
 
 # Hand-curated skip-list. These markets resolve on criteria that
-# aren't probabilistic in the informed-trading sense — flow on them
-# is either jokes, meme-trading, or always-will-resolve-NO bets.
-# Add a slug prefix or exact conditionId here to suppress.
-NOVELTY_SLUG_PREFIXES: tuple[str, ...] = (
-    "will-jesus-christ-return",
-    "will-aliens",
-    "will-god",
-    "will-satan",
-    "will-the-rapture",
+# aren't probabilistic in the informed-trading sense — jokes, meme
+# trades, always-resolves-NO bets (second-coming / aliens / etc.),
+# or markets that resolve on a Schelling-point rather than evidence.
+# Substring match inside slug (lowercased).
+NOVELTY_SLUG_KEYWORDS: tuple[str, ...] = (
+    "jesus-christ",
+    "aliens-exist",
+    "rapture",
+    "second-coming",
+    "god-exist",
+    "satan-",
+    "antichrist",
+    "illuminati",
+    "reptilian",
+    "flat-earth",
+    "simulation-theory",
+    "bigfoot",
+    "loch-ness",
+    "ufo-disclosure",
 )
 
 # Category-level skips. Gamma-api's `category` field.
@@ -139,12 +149,20 @@ def has_enough_lifespan(market_meta: dict[str, Any], cfg: GateConfig) -> bool:
 
 
 def is_not_novelty(market_meta: dict[str, Any], cfg: GateConfig) -> bool:
-    """Market doesn't match the curated novelty blocklist."""
+    """Market doesn't match the curated novelty blocklist.
+
+    Substring match in slug — earlier prefix-match was too tight
+    (slug 'will-the-us-confirm-that-aliens-exist' didn't match the
+    prefix 'will-aliens' even though 'aliens-exist' is obviously
+    the novelty signal).
+    """
     if not cfg.apply_novelty_skip:
         return True
     slug = str(market_meta.get("slug", "") or "").lower()
-    for prefix in NOVELTY_SLUG_PREFIXES:
-        if slug.startswith(prefix):
+    question = str(market_meta.get("question", "") or "").lower()
+    haystack = f"{slug} {question}"
+    for kw in NOVELTY_SLUG_KEYWORDS:
+        if kw in haystack:
             return False
     category = str(market_meta.get("category", "") or "").lower()
     return category not in NOVELTY_CATEGORIES

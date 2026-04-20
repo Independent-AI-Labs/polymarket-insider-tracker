@@ -274,6 +274,8 @@ def report_to_tera_payload(report, cfg: dict[str, Any]) -> dict[str, Any]:
         f"({(report.window_end - report.window_start).total_seconds() / 3600:.1f} h)"
     )
     promoted = getattr(report, "promoted_markets", None) or []
+    watches = getattr(report, "wallets_to_watch", None) or []
+    cross_market_watches = [w for w in watches if w.market_count >= 2]
     return {
         "date": report.date,
         "window_fmt": window_fmt,
@@ -296,6 +298,26 @@ def report_to_tera_payload(report, cfg: dict[str, Any]) -> dict[str, Any]:
                 "category_count": len(p.categories),
             }
             for p in promoted
+        ],
+        "cross_market_wallets": [
+            {
+                "address_display": w.address_display,
+                "profile_url": w.profile_url,
+                "market_count": w.market_count,
+                "total_notional_fmt": f"${w.total_notional:,.0f}",
+                "is_fresh": w.is_fresh,
+                "first_seen_fmt": w.first_seen_fmt,
+                "markets": [
+                    {
+                        "title": m["title"],
+                        "url": m["url"],
+                        "signals_fmt": ", ".join(sorted(m["signals"])),
+                        "notional_fmt": f"${m['notional']:,.0f}",
+                    }
+                    for m in w.markets
+                ],
+            }
+            for w in cross_market_watches[:5]
         ],
     }
 
