@@ -42,6 +42,8 @@ from polymarket_insider_tracker.detector.pdf_appendix import render_pdf  # noqa:
 from polymarket_insider_tracker.detector.signals import REGISTRY, SignalContext  # noqa: E402
 from polymarket_insider_tracker.detector.signals.base import (  # noqa: E402
     _badge_html,
+    _market_state_html,
+    _market_title_cell_html,
     _wallet_cell_html,
     _wallet_list_html,
     category_palette,
@@ -258,7 +260,23 @@ def _glossary_row_for_email(name: str, band: str, desc: str) -> dict[str, Any]:
     }
 
 
-def _section_to_payload(section) -> dict[str, Any]:
+def _safe_float(*candidates) -> float | None:
+    """Return the first candidate coercible to float, else None."""
+    for c in candidates:
+        if c is None or c == "":
+            continue
+        try:
+            return float(c)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _section_to_payload(
+    section,
+    market_meta: dict[str, dict[str, Any]] | None = None,
+    velocity_flagged: set[str] | None = None,
+) -> dict[str, Any]:
     """Reshape the section into a template-friendly payload.
 
     Any pre-rendered HTML fields on `row` (wallet_cell_html,
@@ -267,6 +285,8 @@ def _section_to_payload(section) -> dict[str, Any]:
     (CID for email) governs every badge + blockie occurrence.
     """
     cols = [asdict(c) for c in section.columns]
+    market_meta = market_meta or {}
+    velocity_flagged = velocity_flagged or set()
     rendered_rows = []
     for row in section.rows:
         # Rehydrate mode-sensitive HTML in-place.
@@ -278,15 +298,53 @@ def _section_to_payload(section) -> dict[str, Any]:
                 for tw in row["top_wallets"]
             ])
 
+        # Round 1C: rebuild the market-title cell as HTML — link +
+        # 16×16 donut (lastTradePrice) + volume pill (volume24hr).
+        mid = str(row.get("market_id", "")).lower()
+        meta = market_meta.get(mid) or {}
+        last_trade = _safe_float(
+            row.get("last_trade_price"),
+            meta.get("lastTradePrice"),
+        )
+        volume_24h = _safe_float(
+            row.get("volume_24h"),
+            meta.get("volume24hr"),
+        )
+        flagged = True  # surfaced-by-signal ⇒ bronze
+        # If the volume-velocity signal explicitly deemed this market
+        # below the 3× threshold (can't happen here — it only emits
+        # flagged hits — but the dial exists for future signals), we
+        # grey it out. Default stays bronze.
+        if row.get("multiple") is not None:
+            try:
+                flagged = float(row["multiple"]) >= 3.0
+            except (TypeError, ValueError):
+                flagged = True
+        elif mid and velocity_flagged:
+            flagged = True  # (explicit)
+
         cells = []
         for col in section.columns:
             value = row.get(col.field, "")
             link_url = row.get(col.link_field, "") if col.link_field else ""
+            format_hint = col.format_hint
+            # Replace the plain-text market-title cell with an HTML
+            # cell that carries the donut + pill.
+            if col.field == "market_title" and value:
+                value = _market_title_cell_html(
+                    str(value),
+                    row.get("market_url", "") or link_url,
+                    last_trade_price=last_trade,
+                    volume_24h=volume_24h,
+                    flagged=flagged,
+                )
+                format_hint = "html"
+                link_url = ""  # link is inside the HTML already
             cells.append(
                 {
                     "value": value,
                     "align": col.align,
-                    "format_hint": col.format_hint,
+                    "format_hint": format_hint,
                     "link_url": link_url,
                 }
             )
@@ -312,7 +370,17 @@ def report_to_tera_payload(report, cfg: dict[str, Any]) -> dict[str, Any]:
     )
     promoted = getattr(report, "promoted_markets", None) or []
     watches = getattr(report, "wallets_to_watch", None) or []
+    market_meta: dict[str, dict[str, Any]] = getattr(report, "market_meta", {}) or {}
+    velocity_flagged: set[str] = getattr(report, "velocity_flagged_markets", set()) or set()
     cross_market_watches = [w for w in watches if w.market_count >= 2]
+
+    def _state_for(mid: str) -> tuple[float | None, float | None]:
+        meta = market_meta.get((mid or "").lower(), {}) or {}
+        return (
+            _safe_float(meta.get("lastTradePrice")),
+            _safe_float(meta.get("volume24hr")),
+        )
+
     return {
         "date": report.date,
         "window_fmt": window_fmt,
@@ -320,7 +388,10 @@ def report_to_tera_payload(report, cfg: dict[str, Any]) -> dict[str, Any]:
         "summary": [list(pair) for pair in report.summary],
         "headline": report.headline,
         "source_label": report.source_label,
-        "sections": [_section_to_payload(s) for s in report.sections],
+        "sections": [
+            _section_to_payload(s, market_meta, velocity_flagged)
+            for s in report.sections
+        ],
         "glossary": [
             _glossary_row_for_email(name, band, desc)
             for (name, band, desc) in report.glossary
@@ -328,17 +399,7 @@ def report_to_tera_payload(report, cfg: dict[str, Any]) -> dict[str, Any]:
         "footer_legal_name": report.footer_legal_name,
         "footer_postal_address": report.footer_postal_address,
         "promoted_markets": [
-            {
-                "market_title": p.market_title,
-                "market_url": p.market_url,
-                "categories": p.categories,
-                "category_badges_html": p.category_badges_html,
-                "signal_names": p.signal_names,
-                "signal_badges_html": p.signal_badges_html,
-                "total_notional": p.total_notional,
-                "total_notional_fmt": f"${p.total_notional:,.0f}",
-                "category_count": len(p.categories),
-            }
+            _promoted_market_payload(p, market_meta)
             for p in promoted
         ],
         "cross_market_wallets": [
@@ -352,26 +413,65 @@ def report_to_tera_payload(report, cfg: dict[str, Any]) -> dict[str, Any]:
                 "first_seen_fmt": w.first_seen_fmt,
                 "category_badges_html": w.category_badges_html,
                 "markets": [
-                    {
-                        "title": m["title"],
-                        "url": m["url"],
-                        "signals_fmt": m.get("signals_fmt", ""),
-                        # Re-render in the current icon mode (so CID
-                        # refs register when we're building the email
-                        # payload). The pre-computed HTML in the
-                        # composer's WalletWatch.markets is from
-                        # whatever mode was active at compose time,
-                        # which may not match.
-                        "signals_badges_html": signal_badges_html(
-                            sorted(m.get("signals_with_category", {}).items())
-                        ),
-                        "notional_fmt": f"${m['notional']:,.0f}",
-                    }
+                    _cross_wallet_market_payload(m, market_meta)
                     for m in w.markets
                 ],
             }
             for w in cross_market_watches[:5]
         ],
+    }
+
+
+def _promoted_market_payload(
+    p: Any, market_meta: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    meta = market_meta.get((p.market_id or "").lower(), {}) or {}
+    last_trade = _safe_float(meta.get("lastTradePrice"))
+    volume_24h = _safe_float(meta.get("volume24hr"))
+    return {
+        "market_title": p.market_title,
+        "market_url": p.market_url,
+        "market_title_cell_html": _market_title_cell_html(
+            p.market_title,
+            p.market_url,
+            last_trade_price=last_trade,
+            volume_24h=volume_24h,
+            flagged=True,
+        ),
+        "categories": p.categories,
+        "category_badges_html": p.category_badges_html,
+        "signal_names": p.signal_names,
+        "signal_badges_html": p.signal_badges_html,
+        "total_notional": p.total_notional,
+        "total_notional_fmt": f"${p.total_notional:,.0f}",
+        "category_count": len(p.categories),
+    }
+
+
+def _cross_wallet_market_payload(
+    m: dict[str, Any], market_meta: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    mid = str(m.get("market_id", "")).lower()
+    meta = market_meta.get(mid, {}) or {}
+    last_trade = _safe_float(meta.get("lastTradePrice"))
+    volume_24h = _safe_float(meta.get("volume24hr"))
+    return {
+        "title": m["title"],
+        "url": m["url"],
+        "signals_fmt": m.get("signals_fmt", ""),
+        # Re-render in the current icon mode (so CID refs register
+        # when we're building the email payload).
+        "signals_badges_html": signal_badges_html(
+            sorted(m.get("signals_with_category", {}).items())
+        ),
+        "market_title_cell_html": _market_title_cell_html(
+            m.get("title", ""),
+            m.get("url", ""),
+            last_trade_price=last_trade,
+            volume_24h=volume_24h,
+            flagged=True,
+        ),
+        "notional_fmt": f"${m['notional']:,.0f}",
     }
 
 

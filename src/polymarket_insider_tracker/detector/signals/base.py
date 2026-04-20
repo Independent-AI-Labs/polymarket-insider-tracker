@@ -357,6 +357,111 @@ def _blockie_img(address: str) -> str:
     )
 
 
+def _volume_pill_html(volume_24h: float | None) -> str:
+    """Tabular-nums volume pill — `$2.5M 24h` / `$125K 24h` / `—`."""
+    if volume_24h is None:
+        return ""
+    try:
+        v = float(volume_24h)
+    except (TypeError, ValueError):
+        return ""
+    if v <= 0:
+        return ""
+    if v >= 1_000_000:
+        fmt = f"${v / 1_000_000:.1f}M"
+    elif v >= 1_000:
+        fmt = f"${v / 1_000:.0f}K"
+    else:
+        fmt = f"${v:.0f}"
+    return (
+        f'<span style="display:inline-block;vertical-align:2px;'
+        f'margin-left:6px;padding:1px 6px;border-radius:3px;'
+        f'background:#f5f5f4;color:#57534e;font-size:10.5px;'
+        f'font-weight:600;letter-spacing:0.02em;'
+        f'font-variant-numeric:tabular-nums;white-space:nowrap;'
+        f'line-height:1.3">{fmt} 24h</span>'
+    )
+
+
+def _market_state_html(
+    *,
+    last_trade_price: float | None,
+    volume_24h: float | None,
+    flagged: bool = True,
+) -> str:
+    """Donut + volume pill, sized to sit next to a market title.
+
+    `last_trade_price` is the implied probability of YES ∈ [0, 1].
+    `flagged` picks bronze (≥3× velocity / any signal fired) vs grey
+    (informational only). Caller decides; every surface in the
+    newsletter today is flagged-by-construction (the market surfaced
+    because a signal fired), so the default is bronze.
+    """
+    from .icons import market_state_donut_src
+
+    if last_trade_price is None and not volume_24h:
+        return ""
+    try:
+        frac = float(last_trade_price) if last_trade_price is not None else 0.0
+    except (TypeError, ValueError):
+        frac = 0.0
+    # Clip; Polymarket binary markets live in [0, 1] but occasionally
+    # return a near-zero-or-one float the donut can still render fine.
+    frac = max(0.0, min(1.0, frac))
+    donut_src = market_state_donut_src(frac, flagged)
+    donut_html = (
+        f'<img src="{donut_src}" width="16" height="16" alt="" '
+        f'style="display:inline-block;vertical-align:-3px;'
+        f'margin-right:2px;border:0">'
+        if donut_src else ""
+    )
+    pct_label = (
+        f'<span style="margin-left:2px;color:#57534e;font-size:10.5px;'
+        f'font-weight:600;font-variant-numeric:tabular-nums;'
+        f'letter-spacing:0.02em;vertical-align:1px">'
+        f'{int(round(frac * 100))}%</span>'
+        if last_trade_price is not None else ""
+    )
+    pill = _volume_pill_html(volume_24h)
+    return (
+        f'<span style="white-space:nowrap;display:inline-block;'
+        f'margin-left:8px">{donut_html}{pct_label}{pill}</span>'
+    )
+
+
+def _market_title_cell_html(
+    title: str,
+    url: str,
+    *,
+    last_trade_price: float | None,
+    volume_24h: float | None,
+    flagged: bool = True,
+) -> str:
+    """Market title link + donut + volume pill — the per-row cell.
+
+    Used by `_section_to_payload` to replace the plain-text
+    `market_title` column with a richer HTML cell in every signal
+    section, plus by the cross-signal-markets + cross-market-wallets
+    cards.
+    """
+    title_html = title or "—"
+    if url:
+        link = (
+            f'<a href="{url}" style="color:#111;text-decoration:none;'
+            f'font-weight:500">{title_html}</a>'
+        )
+    else:
+        link = (
+            f'<span style="color:#111;font-weight:500">{title_html}</span>'
+        )
+    state = _market_state_html(
+        last_trade_price=last_trade_price,
+        volume_24h=volume_24h,
+        flagged=flagged,
+    )
+    return f'{link}{state}'
+
+
 def _wallet_cell_html(
     address: str,
     *,

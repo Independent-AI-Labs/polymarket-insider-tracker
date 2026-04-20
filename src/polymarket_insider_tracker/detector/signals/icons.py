@@ -301,3 +301,93 @@ def blockie_data_uri(address: str) -> str:
     if img is None:
         return ""
     return _pil_to_data_uri(img)
+
+
+# ── Market-state donut (implied probability of YES) ──────────────────
+#
+# 16×16 display donut rendered at 2× (32×32) for retina sharpness.
+# Two arcs: a muted track ring + a coloured filled arc whose length
+# equals `filled_fraction ∈ [0, 1]`. A bronze tint signals the market
+# is flagged (e.g. volume velocity ≥ 3× baseline, or any signal fired
+# on it). A muted grey tint is reserved for purely informational
+# contexts.
+
+DONUT_DISPLAY_PX = 16
+DONUT_RENDER_PX = 32  # 2× retina scale
+DONUT_STROKE_PX = 6   # 3 display px — reads cleanly at 16 px
+DONUT_TRACK_COLOUR = "#e5e7eb"      # neutral ring
+DONUT_BRONZE = "#b45309"            # flagged
+DONUT_GREY = "#9ca3af"              # informational
+
+
+@lru_cache(maxsize=256)
+def _rendered_market_donut(
+    pct_int: int, flagged: bool
+) -> Image.Image:
+    """Render a donut where the filled arc subtends `pct_int / 100`
+    of the circle, starting at 12 o'clock and sweeping clockwise.
+    """
+    pct = max(0, min(100, int(pct_int)))
+    size = DONUT_RENDER_PX
+    stroke = DONUT_STROKE_PX
+    # Use RGBA + anti-aliased super-sampling for a crisper donut:
+    # render at 3× the retina resolution then downsample with LANCZOS.
+    up = size * 3
+    up_stroke = stroke * 3
+    img = Image.new("RGBA", (up, up), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    pad = up_stroke // 2 + 1
+    bbox = [pad, pad, up - pad, up - pad]
+    # Track ring underneath.
+    d.ellipse(
+        [bbox[0] - 1, bbox[1] - 1, bbox[2] + 1, bbox[3] + 1],
+        outline=None,
+    )
+    # Arcs use `ImageDraw.arc` which honours `width`.
+    d.arc(bbox, 0, 360, fill=DONUT_TRACK_COLOUR, width=up_stroke)
+    if pct > 0:
+        fill = DONUT_BRONZE if flagged else DONUT_GREY
+        # Pillow's arc starts at 3 o'clock and sweeps clockwise; we
+        # want 12 o'clock, so offset by -90°.
+        start = -90
+        end = start + int(round(pct * 3.6))
+        d.arc(bbox, start, end, fill=fill, width=up_stroke)
+    img = img.resize(
+        (size, size), Image.Resampling.LANCZOS
+    )
+    return img
+
+
+def market_state_donut_src(
+    filled_fraction: float, flagged: bool
+) -> str:
+    """Mode-aware donut src.
+
+    `filled_fraction` is clipped to [0, 1] and rounded to the nearest
+    integer percent, giving a bounded CID space (~100 distinct parts
+    worst-case per flagged bool). In practice each send emits one
+    part per distinct rounded-percent × flagged tuple — ~20–40 parts
+    for a typical daily newsletter.
+    """
+    try:
+        frac = float(filled_fraction)
+    except (TypeError, ValueError):
+        frac = 0.0
+    pct_int = max(0, min(100, int(round(frac * 100))))
+    img = _rendered_market_donut(pct_int, bool(flagged))
+    tone = "bronze" if flagged else "grey"
+    cid = f"donut-{pct_int:03d}-{tone}"
+    return _emit_image_src(img, cid)
+
+
+def market_state_donut_data_uri(
+    filled_fraction: float, flagged: bool
+) -> str:
+    """Force data-URI render regardless of mode. Used by PDF path."""
+    try:
+        frac = float(filled_fraction)
+    except (TypeError, ValueError):
+        frac = 0.0
+    pct_int = max(0, min(100, int(round(frac * 100))))
+    img = _rendered_market_donut(pct_int, bool(flagged))
+    return _pil_to_data_uri(img)

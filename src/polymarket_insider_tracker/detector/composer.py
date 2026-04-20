@@ -147,6 +147,24 @@ def compose(context: SignalContext, *, source_label: str = "") -> DailyReport:
     # getattr so the base DailyReport dataclass stays minimal.
     report.promoted_markets = promoted  # type: ignore[attr-defined]
     report.wallets_to_watch = wallets_to_watch  # type: ignore[attr-defined]
+    # Round 1C: carry gamma market metadata through to the payload
+    # builder so donut/volume-pill cells can read lastTradePrice +
+    # volume24hr per market. Keyed by lowercased conditionId.
+    report.market_meta = context.market_meta  # type: ignore[attr-defined]
+    # The set of market_ids (lowercased) flagged by volume-velocity
+    # at ≥ 3× baseline — donut colours bronze for these and anything
+    # else surfaced today; grey is reserved for pure-informational
+    # contexts we don't currently emit.
+    velocity_flagged: set[str] = set()
+    for h in all_hits:
+        if h.signal_id.startswith("03-A"):
+            mult = h.row.get("multiple")
+            try:
+                if mult is not None and float(mult) >= 3.0:
+                    velocity_flagged.add(h.market_id.lower())
+            except (TypeError, ValueError):
+                pass
+    report.velocity_flagged_markets = velocity_flagged  # type: ignore[attr-defined]
     return report
 
 
