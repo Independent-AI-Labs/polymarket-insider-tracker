@@ -241,27 +241,22 @@ def _pct(value: float | int) -> str:
 
 
 def _wallet_list_html(contribs: list[tuple[str, float]]) -> str:
-    """Render a list of (address, amount) pairs as HTML with
-    clickable links to each wallet's Polymarket profile.
+    """Render (address, amount) pairs as HTML.
 
-    Used by market-level signals (OFI, clusters, velocity) in the
-    'Top contributors' column so every wallet mention in the email
-    AND PDF is a single-click drill-down.
+    Used by market-level signals (OFI, clusters, velocity). Delegates
+    per-wallet rendering to `_wallet_cell_html` so every wallet
+    mention — standalone or in a contributor list — carries the
+    same identicon + link treatment.
     """
     if not contribs:
         return "—"
-    parts = []
-    for addr, amount in contribs:
-        short = _short_wallet(addr)
-        money_fmt = _money(amount)
-        parts.append(
-            f'<a href="https://polymarket.com/profile/{addr}" '
-            f'style="color:#1a5fb4;text-decoration:none;'
-            f'font-family:ui-monospace,\\"SF Mono\\",Menlo,monospace;'
-            f'font-size:12px">{short}</a> '
-            f'<span style="color:#888;font-variant-numeric:tabular-nums">({money_fmt})</span>'
-        )
-    return ", ".join(parts)
+    parts = [
+        _wallet_cell_html(addr, amount=amount, show_amount=True)
+        for addr, amount in contribs
+    ]
+    # Thin non-breaking separator between contributor chips so
+    # identicons remain visually grouped with their address.
+    return ' <span style="color:#ccc">·</span> '.join(parts)
 
 
 # ── Visual system: category palette + badge helpers ─────────────────
@@ -269,6 +264,12 @@ def _wallet_list_html(contribs: list[tuple[str, float]]) -> str:
 # Three disciplined colors per category. fg = full-saturation text,
 # bg = 5% tint for badge fill, bd = 15% tint for a hairline border.
 # Tone-on-tone; no candy colors; newsroom/terminal palette.
+
+# Category icons — PNG data-URIs generated at import time by
+# `icons.py`. We used inline SVG initially; Gmail web (and several
+# other mainstream clients) strips `<svg>` entirely, so the icons
+# were silently invisible. PNG data-URIs are the universal-compat
+# idiom.
 
 CATEGORY_PALETTE: dict[str, dict[str, str]] = {
     "informed_flow":   {"fg": "#1e3a8a", "bg": "#eff6ff", "bd": "#bfdbfe",
@@ -293,19 +294,29 @@ def category_palette(category: str) -> dict[str, str]:
 
 
 def _badge_html(label: str, category: str, *, size: str = "sm") -> str:
-    """Inline-styled badge — Gmail-safe, PDF-safe, zero emoji.
+    """Inline-styled badge with PNG-icon prepended — universal email.
 
-    `size='sm'` = 10px (used for signal-name badges).
-    `size='md'` = 11px (used for category badges in KPI summary).
+    Icon `src` is mode-aware: `cid:…` for email (registered with the
+    icons module so newsletter-daily can build MML `<#part>` blocks)
+    and `data:image/png;base64,…` for PDF.
     """
+    from .icons import category_icon_src
+
     p = category_palette(category)
     font_size = "10px" if size == "sm" else "11px"
+    icon_src = category_icon_src(category, p["fg"])
+    icon_html = (
+        f'<img src="{icon_src}" width="12" height="12" alt="" '
+        f'style="vertical-align:-2px;margin-right:4px;border:0">'
+        if icon_src else ""
+    )
     return (
-        f'<span style="display:inline-block;padding:2px 7px;'
+        f'<span style="display:inline-block;padding:2px 8px 2px 6px;'
         f'border-radius:3px;font-size:{font_size};font-weight:600;'
         f'letter-spacing:0.02em;color:{p["fg"]};'
-        f'background:{p["bg"]};border:1px solid {p["bd"]};'
-        f'margin-right:4px;white-space:nowrap">{label}</span>'
+        f'background:{p["bg"]};'
+        f'margin-right:4px;white-space:nowrap;'
+        f'line-height:1.2">{icon_html}{label}</span>'
     )
 
 
@@ -323,3 +334,56 @@ def category_badges_html(categories: list[str]) -> str:
         p = category_palette(cat)
         parts.append(_badge_html(p["label"], cat, size="md"))
     return "".join(parts)
+
+
+# ── Blockie identicons (PNG data-URI, email-safe) ──────────────────
+
+
+def _blockie_img(address: str) -> str:
+    """Blockie as an `<img>` — `src` is `cid:…` for email (registered
+    with the icons module) or `data:…;base64,…` for PDF. CID path
+    keeps email size O(N) instead of O(N × occurrences).
+    """
+    if not address:
+        return ""
+    from .icons import blockie_src
+    src = blockie_src(address)
+    if not src:
+        return ""
+    return (
+        f'<img src="{src}" width="14" height="14" alt="" '
+        f'style="display:inline-block;vertical-align:-3px;'
+        f'margin-right:4px;border:0;border-radius:2px">'
+    )
+
+
+def _wallet_cell_html(
+    address: str,
+    *,
+    amount: float | None = None,
+    show_amount: bool = False,
+) -> str:
+    """Canonical wallet mention — blockie + shortform + profile link.
+
+    Every wallet mention in the product flows through this helper so
+    email, PDF, and any future surface stay in lock-step.
+    """
+    if not address:
+        return "—"
+    short = _short_wallet(address)
+    blockie = _blockie_img(address)
+    amount_tail = ""
+    if show_amount and amount is not None:
+        amount_tail = (
+            f' <span style="color:#888;font-variant-numeric:tabular-nums">'
+            f'({_money(amount)})</span>'
+        )
+    style = (
+        "color:#1a5fb4;text-decoration:none;"
+        "font-family:ui-monospace,'SF Mono',Menlo,monospace;"
+        "font-size:12px"
+    )
+    return (
+        f'{blockie}<a href="https://polymarket.com/profile/{address}" '
+        f'style="{style}">{short}</a>{amount_tail}'
+    )

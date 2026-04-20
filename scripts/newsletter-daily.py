@@ -39,7 +39,13 @@ from newsletter_common import deliver_via_himalaya  # noqa: E402
 
 from polymarket_insider_tracker.detector.composer import compose  # noqa: E402
 from polymarket_insider_tracker.detector.pdf_appendix import render_pdf  # noqa: E402
-from polymarket_insider_tracker.detector.signals import SignalContext  # noqa: E402
+from polymarket_insider_tracker.detector.signals import REGISTRY, SignalContext  # noqa: E402
+from polymarket_insider_tracker.detector.signals.base import (  # noqa: E402
+    _badge_html,
+    _wallet_cell_html,
+    category_palette,
+)
+from polymarket_insider_tracker.detector.signals import icons as icons_mod  # noqa: E402
 
 LOG = logging.getLogger("newsletter-daily")
 
@@ -229,6 +235,27 @@ def write_alerts_csv(raw_alerts: list[dict], date_str: str, out_dir: Path) -> Pa
 # ── Tera-payload serializer ─────────────────────────────────────────
 
 
+def _glossary_row_for_email(name: str, band: str, desc: str) -> dict[str, Any]:
+    """Resolve a glossary row's category via the registry so the
+    email template can render the same category badge the PDF uses.
+    """
+    category = ""
+    for sig in REGISTRY:
+        if sig.name == name:
+            category = sig.category
+            break
+    category_badge = ""
+    if category:
+        label = category_palette(category)["label"]
+        category_badge = _badge_html(label, category)
+    return {
+        "name": name,
+        "band": band,
+        "desc": desc,
+        "category_badge_html": category_badge,
+    }
+
+
 def _section_to_payload(section) -> dict[str, Any]:
     """Reshape the section into a template-friendly payload.
 
@@ -284,7 +311,10 @@ def report_to_tera_payload(report, cfg: dict[str, Any]) -> dict[str, Any]:
         "headline": report.headline,
         "source_label": report.source_label,
         "sections": [_section_to_payload(s) for s in report.sections],
-        "glossary": [list(g) for g in report.glossary],
+        "glossary": [
+            _glossary_row_for_email(name, band, desc)
+            for (name, band, desc) in report.glossary
+        ],
         "footer_legal_name": report.footer_legal_name,
         "footer_postal_address": report.footer_postal_address,
         "promoted_markets": [
@@ -303,6 +333,7 @@ def report_to_tera_payload(report, cfg: dict[str, Any]) -> dict[str, Any]:
         ],
         "cross_market_wallets": [
             {
+                "wallet_cell_html": _wallet_cell_html(w.address),
                 "address_display": w.address_display,
                 "profile_url": w.profile_url,
                 "market_count": w.market_count,
@@ -333,6 +364,7 @@ def build_rows(
     payload: dict[str, Any],
     cfg: dict[str, Any],
     targets_filter: str | None,
+    inline_images: list[dict[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
     targets = cfg["delivery"]["targets"]
     if targets_filter:
@@ -353,6 +385,11 @@ def build_rows(
                 "unsubscribe_url": "https://example.invalid/unsubscribe?token=canary-placeholder",
                 "report": payload,
                 "style": cfg["email"]["style"],
+                # One entry per inline image. Each will render as a
+                # `<#part filename=… content-id=…>` inside the
+                # multipart/related wrapper in the template. The
+                # body's <img src="cid:…"> tags point at these parts.
+                "inline_images": inline_images or [],
             }
         )
     return rows
@@ -380,6 +417,10 @@ def main(argv: list[str] | None = None) -> int:
         cfg = yaml.safe_load(fh)
 
     target_date = date.fromisoformat(args.date)
+
+    # Compose once. We'll re-render the visuals twice: once in CID
+    # mode (for the email MIME) and once in data-URI mode (for the
+    # PDF which has no MIME structure).
     context = build_context(target_date)
     report = compose(
         context,
@@ -395,15 +436,17 @@ def main(argv: list[str] | None = None) -> int:
         report.headline[:100],
     )
 
-    # Attachments.
+    # Outer attachments — CSV + PDF — these go at the multipart/mixed
+    # level, alongside the multipart/related containing the HTML body
+    # and its inline CID images.
     attachments: list[Path] = []
     csv_path = write_alerts_csv(report.raw_alerts, report.date, REPORTS_DIR)
     LOG.info("wrote %s (%d rows)", csv_path, len(report.raw_alerts))
     attachments.append(csv_path)
 
-    # Option-B appendix PDF — the analyst's full flagged-activity log.
-    # Retires the legacy market-snapshot PDF per
-    # docs/IMPLEMENTATION-PLAN-SIGNALS.md Phase S3.
+    # PDF render uses data-URIs so no MIME plumbing is needed there.
+    icons_mod.set_render_mode("data_uri")
+    icons_mod.reset_render_pass()
     pdf_path = REPORTS_DIR / f"polymarket-appendix-{report.date}.pdf"
     try:
         render_pdf(report, pdf_path)
@@ -419,6 +462,14 @@ def main(argv: list[str] | None = None) -> int:
             LOG.info("  section %s: %d rows", s.signal_id, len(s.rows))
         return 0
 
+    # Email render uses PNG data-URIs. Proper CID attachments would
+    # require patching mml-lib (no Content-ID emitter exists in the
+    # MML grammar — verified against mml-lib-1.1.2 sources) OR a
+    # Python-side SMTP sender that bypasses himalaya. Data-URIs work
+    # in every modern client (Gmail web + mobile, Apple Mail,
+    # Outlook 2016+, Thunderbird) and keep us single-sender.
+    icons_mod.set_render_mode("data_uri")
+    icons_mod.reset_render_pass()
     payload = report_to_tera_payload(report, cfg)
     rows = build_rows(payload, cfg, args.targets)
     rc = deliver_via_himalaya(

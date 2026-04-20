@@ -1,4 +1,9 @@
 <#part type=text/html>
+{# Body uses PNG data-URIs for icons + blockies — universal
+   rendering across Gmail, Apple Mail, Outlook, Thunderbird. CID
+   attachments would need mml-lib Content-ID support (not present
+   in 1.1.2) or a separate Python-side SMTP sender. See
+   scripts/newsletter-daily.py for the rationale. -#}
 {# Generic daily-newsletter template. All badges / category colors
    / palette live in detector/signals/base.py — template is a
    dumb iterator. See docs/SPEC-MARKET-SIGNALS.md + docs/signals/*.md.
@@ -17,7 +22,12 @@
       {{ report.window_fmt }} · {{ report.source_label }}
     </p>
   </div>
-  <div style="height:2px;background:linear-gradient(to right,#b45309 0,#b45309 48px,transparent 48px)"></div>
+  {# Bronze gutter bar under the cover — Gmail-safe plain block.
+     `linear-gradient` is stripped by Gmail web, so we use a
+     fixed-width inline div instead. -#}
+  <div style="line-height:0;font-size:0;height:2px;background:transparent">
+    <div style="display:inline-block;width:48px;height:2px;background:#b45309"></div>
+  </div>
 
   {# ── Summary stats ─────────────────────────────────────────── #}
   <div style="padding:16px 28px;background:#fafafa;border-bottom:1px solid #eee">
@@ -53,9 +63,9 @@
       <tbody>
       {% for w in report.cross_market_wallets %}
         <tr style="border-bottom:1px solid #f5f5f5">
-          <td style="padding:10px 10px 10px 0;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;vertical-align:top">
-            <a href="{{ w.profile_url }}" style="color:#1a5fb4;text-decoration:none">{{ w.address_display }}</a>
-            {% if w.is_fresh %}<div style="margin-top:3px;display:inline-block;padding:2px 7px;border-radius:3px;font-size:10px;font-weight:600;color:#92400e;background:#fffbeb;border:1px solid #fde68a;font-family:{{ style.font_family }}">fresh · {{ w.first_seen_fmt }}</div>{% endif %}
+          <td style="padding:10px 10px 10px 0;font-size:12px;vertical-align:top">
+            {{ w.wallet_cell_html | safe }}
+            {% if w.is_fresh %}<div style="margin-top:3px;display:inline-block;padding:2px 7px;border-radius:3px;font-size:10px;font-weight:600;color:#92400e;background:#fffbeb;font-family:{{ style.font_family }}">fresh · {{ w.first_seen_fmt }}</div>{% endif %}
           </td>
           <td style="padding:10px;text-align:right;font-weight:700;vertical-align:top">{{ w.market_count }}</td>
           <td style="padding:10px;text-align:right;font-weight:700;vertical-align:top">{{ w.total_notional_fmt }}</td>
@@ -124,14 +134,12 @@
         <tr style="border-bottom:1px solid #f5f5f5">
         {% for cell in row.cells %}
           <td style="padding:10px 10px 10px 0;text-align:{{ cell.align }};vertical-align:top">
-            {% if cell.link_url %}
-            <a href="{{ cell.link_url }}" style="color:{% if cell.format_hint == 'wallet' %}#1a5fb4{% else %}#111{% endif %};text-decoration:none{% if cell.format_hint == 'wallet' %};font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px{% elif cell.format_hint == 'money' %};font-weight:600{% endif %}">{{ cell.value }}</a>
-            {% elif cell.format_hint == 'html' %}
+            {% if cell.format_hint == 'html' %}
             {{ cell.value | safe }}
+            {% elif cell.link_url %}
+            <a href="{{ cell.link_url }}" style="color:#111;text-decoration:none{% if cell.format_hint == 'money' %};font-weight:600{% endif %}">{{ cell.value }}</a>
             {% elif cell.format_hint == 'money' or cell.format_hint == 'percent' %}
             <span style="font-weight:600">{{ cell.value }}</span>
-            {% elif cell.format_hint == 'wallet' %}
-            <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px">{{ cell.value }}</span>
             {% elif cell.format_hint == 'datetime' or cell.format_hint == 'duration' %}
             <span style="color:#666;font-size:12px;white-space:nowrap">{{ cell.value }}</span>
             {% else %}
@@ -155,9 +163,10 @@
     <table style="width:100%;border-collapse:collapse;font-size:11.5px;line-height:1.5;color:#444">
     {% for g in report.glossary %}
       <tr style="vertical-align:top">
-        <td style="padding:4px 12px 4px 0;white-space:nowrap;font-weight:600;color:#111">{{ g.0 }}</td>
-        <td style="padding:4px 12px 4px 0;white-space:nowrap;color:#888;font-size:10px;letter-spacing:0.04em;text-transform:uppercase">{{ g.1 }}</td>
-        <td style="padding:4px 0">{{ g.2 }}</td>
+        <td style="padding:4px 12px 4px 0;white-space:nowrap;font-weight:600;color:#111">{{ g.name }}</td>
+        <td style="padding:4px 12px 4px 0;white-space:nowrap">{{ g.category_badge_html | safe }}</td>
+        <td style="padding:4px 12px 4px 0;white-space:nowrap;color:#888;font-size:10px;letter-spacing:0.04em;text-transform:uppercase">{{ g.band }}</td>
+        <td style="padding:4px 0">{{ g.desc }}</td>
       </tr>
     {% endfor %}
     </table>
