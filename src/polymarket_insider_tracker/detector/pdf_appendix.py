@@ -119,13 +119,94 @@ def _render_html(report: DailyReport) -> str:
     ]
     parts.append(_cover(report))
     parts.append(_headline(report))
+    parts.append(_wallets_to_watch(report))
     parts.append(_cross_signal_tier(report))
     parts.append(_by_market_log(report))
-    parts.append(_top_markets_by_flagged(report))
     parts.append(_glossary(report))
     parts.append(_footer(report))
     parts.append("</body></html>")
     return "\n".join(parts)
+
+
+def _wallets_to_watch(report: DailyReport) -> str:
+    """Wallet-centric tier — the analyst's view.
+
+    Priority-ranked: wallets on multiple markets are at the top,
+    fresh wallets highlighted. Single-market wallets still appear
+    but below the cross-market ones. Retires the redundant
+    "Top markets by flagged notional" section that just echoed
+    the flagged-activity log.
+    """
+    watches = getattr(report, "wallets_to_watch", None) or []
+    if not watches:
+        return ""
+
+    cross_market = [w for w in watches if w.market_count >= 2]
+    single_market = [w for w in watches if w.market_count == 1]
+
+    parts = ['<h2>Wallets to watch</h2>']
+    if cross_market:
+        parts.append(
+            '<h3 style="margin:8pt 0 4pt;color:#8a4b00">'
+            f'Cross-market wallets ({len(cross_market)}) '
+            '— appear on ≥ 2 flagged markets</h3>'
+        )
+        parts.append(
+            '<p class="muted">Strongest tell: the same proxy wallet '
+            'shows up on multiple flagged markets the same day. Either '
+            'an organised operator, a pro trader with a macro view, or '
+            'an insider with scope across correlated outcomes.</p>'
+        )
+        parts.append(_watches_table(cross_market))
+
+    # Cap single-market list — the cross-market tier is what M.
+    # actually cares about.
+    top_single = single_market[:15]
+    if top_single:
+        parts.append(
+            '<h3 style="margin:12pt 0 4pt;color:#555">'
+            f'Single-market wallets (top {len(top_single)} by notional)</h3>'
+        )
+        parts.append(_watches_table(top_single))
+    return "".join(parts)
+
+
+def _watches_table(watches) -> str:
+    parts = [
+        '<table><thead><tr>'
+        '<th>Wallet</th>'
+        '<th>First seen</th>'
+        '<th class="num">Total flagged</th>'
+        '<th class="num">Markets</th>'
+        '<th>Markets / signals</th>'
+        '</tr></thead><tbody>'
+    ]
+    for w in watches:
+        markets_cell = "<br>".join(
+            (
+                f'<a href="{m["url"]}">{m["title"]}</a> '
+                f'<span class="muted">'
+                f'({", ".join(sorted(m["signals"]))})</span>'
+                f'{"  ★" if m.get("promoted") else ""}'
+            )
+            for m in w.markets[:5]
+        )
+        fresh_tag = (
+            ' <span class="signal-tag" style="background:#fff3cd;color:#8a4b00">fresh</span>'
+            if w.is_fresh else ""
+        )
+        first_seen = w.first_seen_fmt or "—"
+        parts.append(
+            f'<tr>'
+            f'<td class="mono"><a href="{w.profile_url}">{w.address_display}</a>{fresh_tag}</td>'
+            f'<td>{first_seen}</td>'
+            f'<td class="num">${w.total_notional:,.0f}</td>'
+            f'<td class="num">{w.market_count}</td>'
+            f'<td>{markets_cell}</td>'
+            f'</tr>'
+        )
+    parts.append("</tbody></table>")
+    return "".join(parts)
 
 
 def _cross_signal_tier(report: DailyReport) -> str:
@@ -354,7 +435,15 @@ def _row_notional(row: dict[str, Any]) -> str:
 def _row_extra(row: dict[str, Any], signal_id: str) -> str:
     """A one-line 'why flagged' detail. Varies per signal."""
     if signal_id.startswith("01-A"):
-        return f"first seen {row.get('first_seen_fmt', '—')} ago"
+        seen = row.get("first_seen_fmt", "—")
+        avg = row.get("avg_price_fmt", "")
+        payoff = row.get("max_payoff_fmt", "")
+        bits = [f"first seen {seen} ago"]
+        if avg:
+            bits.append(f"avg {avg}")
+        if payoff:
+            bits.append(f"payoff ≤ {payoff}")
+        return " · ".join(bits)
     if signal_id.startswith("01-B"):
         return f"{row.get('variant_display', '')} · {row.get('context_fmt', '')}"
     if signal_id.startswith("02-A"):

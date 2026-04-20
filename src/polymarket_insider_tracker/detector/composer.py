@@ -35,12 +35,7 @@ PROMOTION_MIN_CATEGORIES = 2
 
 @dataclass
 class PromotedMarket:
-    """A market where multiple signal categories fired.
-
-    Distinct from a single-signal hit — promoted markets are what
-    M. actually reads. The PDF renders them in their own tier
-    before the per-signal log, and the headline prefers them.
-    """
+    """A market where multiple signal categories fired."""
 
     market_id: str
     market_title: str
@@ -49,6 +44,39 @@ class PromotedMarket:
     signal_names: list[str]
     total_notional: float
     hit_details: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class WalletWatch:
+    """A wallet that appeared in at least one flagged activity.
+
+    WalletWatch rows are the analyst-centric view. Scored by the
+    number of distinct markets the wallet touched (cross-market
+    recurrence is the strongest tell we have) × total notional
+    summed across markets × signal categories it participated in.
+    """
+
+    address: str
+    address_display: str
+    profile_url: str
+    market_count: int
+    markets: list[dict[str, Any]]  # one entry per market the wallet appeared on
+    total_notional: float
+    signal_names: set[str]
+    categories: set[str]
+    # When available: first observed Polymarket trade timestamp
+    # (from fresh-wallet probe). None if never probed.
+    first_seen_fmt: str = ""
+    is_fresh: bool = False
+
+    @property
+    def priority_score(self) -> float:
+        """A rough ordering: more markets + more categories + more notional."""
+        return (
+            100 * self.market_count
+            + 10 * len(self.categories)
+            + self.total_notional / 10_000
+        )
 
 
 def compose(context: SignalContext, *, source_label: str = "") -> DailyReport:
@@ -75,11 +103,15 @@ def compose(context: SignalContext, *, source_label: str = "") -> DailyReport:
         )
     )
 
-    # Cross-signal promotion — the key round-2 fix.
+    # Cross-signal promotion — round-2 fix.
     promoted = _compute_promoted_markets(all_hits)
 
-    headline = _compose_headline(all_hits, promoted, context)
-    summary = _compose_summary(context, all_hits, promoted)
+    # Wallet-centric recurrence — round-3 fix. Flips the report
+    # from market-centric to analyst-centric.
+    wallets_to_watch = _compute_wallets_to_watch(all_hits, promoted)
+
+    headline = _compose_headline(all_hits, promoted, wallets_to_watch, context)
+    summary = _compose_summary(context, all_hits, promoted, wallets_to_watch)
     glossary = [
         (s.name, s.reliability_band, s.description) for s in REGISTRY
     ]
@@ -97,11 +129,10 @@ def compose(context: SignalContext, *, source_label: str = "") -> DailyReport:
         raw_alerts=raw_alerts,
         source_label=source_label,
     )
-    # Promoted markets aren't in the base DailyReport dataclass (it's
-    # defined in signals/base.py and deliberately minimal). Attach as
-    # an attribute; the PDF and newsletter payload both read it via
-    # getattr.
+    # Attach round-2/3 outputs as attributes — consumers read via
+    # getattr so the base DailyReport dataclass stays minimal.
     report.promoted_markets = promoted  # type: ignore[attr-defined]
+    report.wallets_to_watch = wallets_to_watch  # type: ignore[attr-defined]
     return report
 
 
@@ -183,22 +214,183 @@ def _compute_promoted_markets(hits: list[SignalHit]) -> list[PromotedMarket]:
     return promoted
 
 
+def _compute_wallets_to_watch(
+    hits: list[SignalHit],
+    promoted: list[PromotedMarket],
+) -> list[WalletWatch]:
+    """Aggregate every wallet that appeared in ANY flagged activity.
+
+    Sources the wallet list from:
+      - explicit wallet_address on signal hits (fresh-wallet, unusual-size)
+      - top_wallets arrays inside market-level hits (OFI, clusters,
+        volume velocity) — the reader doesn't want a market-level
+        contributor-list to be invisible at the wallet-centric view.
+    """
+    by_wallet: dict[str, dict[str, Any]] = {}
+    promoted_market_ids = {p.market_id for p in promoted}
+
+    for hit in hits:
+        signal_meta = None
+        for signal in REGISTRY:
+            if signal.id == hit.signal_id:
+                signal_meta = signal
+                break
+        if signal_meta is None:
+            continue
+
+        # 1) Explicit wallet on the hit (wallet-level signals).
+        if hit.wallet_address:
+            _upsert_wallet(
+                by_wallet,
+                wallet=hit.wallet_address,
+                hit=hit,
+                signal_meta=signal_meta,
+                notional=_money_from_row(hit.row),
+                market_promoted=hit.market_id.lower() in promoted_market_ids,
+                role="primary",
+                first_seen_fmt=hit.row.get("first_seen_fmt", "") if hit.signal_id.startswith("01-A") else "",
+                is_fresh=hit.signal_id.startswith("01-A"),
+            )
+
+        # 2) Contributor lists on market-level hits.
+        for contrib in hit.row.get("top_wallets", []) or []:
+            addr = str(contrib.get("address", "")).lower()
+            amount = float(contrib.get("amount", 0))
+            if not addr or amount <= 0:
+                continue
+            _upsert_wallet(
+                by_wallet,
+                wallet=addr,
+                hit=hit,
+                signal_meta=signal_meta,
+                notional=amount,
+                market_promoted=hit.market_id.lower() in promoted_market_ids,
+                role="contributor",
+                first_seen_fmt="",
+                is_fresh=False,
+            )
+
+    watches: list[WalletWatch] = []
+    for addr, e in by_wallet.items():
+        markets_list = sorted(
+            e["markets"].values(),
+            key=lambda m: m["notional"],
+            reverse=True,
+        )
+        watches.append(
+            WalletWatch(
+                address=addr,
+                address_display=f"{addr[:6]}…{addr[-4:]}",
+                profile_url=f"https://polymarket.com/profile/{addr}",
+                market_count=len(markets_list),
+                markets=markets_list,
+                total_notional=e["total_notional"],
+                signal_names=e["signal_names"],
+                categories=e["categories"],
+                first_seen_fmt=e["first_seen_fmt"],
+                is_fresh=e["is_fresh"],
+            )
+        )
+    watches.sort(key=lambda w: w.priority_score, reverse=True)
+    return watches
+
+
+def _upsert_wallet(
+    acc: dict[str, dict[str, Any]],
+    *,
+    wallet: str,
+    hit: SignalHit,
+    signal_meta: Any,
+    notional: float,
+    market_promoted: bool,
+    role: str,
+    first_seen_fmt: str,
+    is_fresh: bool,
+) -> None:
+    entry = acc.setdefault(
+        wallet,
+        {
+            "markets": {},
+            "total_notional": 0.0,
+            "signal_names": set(),
+            "categories": set(),
+            "first_seen_fmt": "",
+            "is_fresh": False,
+        },
+    )
+    mid = hit.market_id.lower() if hit.market_id else ""
+    market_slot = entry["markets"].setdefault(
+        mid,
+        {
+            "market_id": mid,
+            "title": hit.market_title,
+            "url": f"https://polymarket.com/event/{hit.event_slug}" if hit.event_slug else "",
+            "signals": set(),
+            "roles": set(),
+            "promoted": market_promoted,
+            "notional": 0.0,
+        },
+    )
+    market_slot["signals"].add(signal_meta.name)
+    market_slot["roles"].add(role)
+    market_slot["notional"] += notional
+    market_slot["promoted"] = market_slot["promoted"] or market_promoted
+    entry["total_notional"] += notional
+    entry["signal_names"].add(signal_meta.name)
+    entry["categories"].add(signal_meta.category)
+    if first_seen_fmt and not entry["first_seen_fmt"]:
+        entry["first_seen_fmt"] = first_seen_fmt
+    entry["is_fresh"] = entry["is_fresh"] or is_fresh
+
+
+def _money_from_row(row: dict[str, Any]) -> float:
+    for key in ("notional", "net_notional", "combined_notional", "volume_24h"):
+        v = row.get(key)
+        if v is not None:
+            try:
+                return float(abs(v))
+            except (TypeError, ValueError):
+                pass
+    return 0.0
+
+
 def _compose_headline(
     hits: list[SignalHit],
     promoted: list[PromotedMarket],
+    watches: list[WalletWatch],
     context: SignalContext,
 ) -> str:
     """Headline sentence — prefer promoted markets over single-signal hits."""
+    # Strongest possible headline: a wallet that appears on ≥ 2
+    # markets today. That's the clearest insider-adjacent tell we
+    # can report without outcome data.
+    multi_market_watches = [w for w in watches if w.market_count >= 2]
+    if multi_market_watches:
+        top = multi_market_watches[0]
+        titles = [m["title"] for m in top.markets[:3]]
+        title_fmt = " / ".join(f"<em>{t}</em>" for t in titles)
+        fresh_tag = (
+            f" — fresh wallet ({top.first_seen_fmt})"
+            if top.is_fresh else ""
+        )
+        return (
+            f"<strong>Cross-market wallet:</strong> "
+            f"<code>{top.address_display}</code>{fresh_tag} "
+            f"active on {top.market_count} markets "
+            f"({_money_short(top.total_notional)} total): {title_fmt}."
+        )
+
     if promoted:
-        # Up to HEADLINE_FRAGMENT_LIMIT promoted markets, ranked.
         top = promoted[:HEADLINE_FRAGMENT_LIMIT]
         fragments = []
         for p in top:
+            n_cat = len(p.categories)
+            cats_fmt = ", ".join(p.categories)
             fragments.append(
                 f"<em>{p.market_title}</em> fired "
-                f"{len(p.categories)} signal categories "
-                f"({', '.join(p.signal_names)}) — "
-                f"{_money_short(p.total_notional)} notional"
+                f"{n_cat} signal categor{'ies' if n_cat != 1 else 'y'} "
+                f"({cats_fmt}) — "
+                f"{_money_short(p.total_notional)} flagged"
             )
         joined = " · ".join(fragments)
         return f"<strong>Cross-signal today:</strong> {joined}."
@@ -236,6 +428,7 @@ def _compose_summary(
     context: SignalContext,
     hits: list[SignalHit],
     promoted: list[PromotedMarket],
+    watches: list[WalletWatch],
 ) -> list[tuple[str, str]]:
     n_trades = len(context.trades)
     wallets = {str(t.get("proxyWallet", "")).lower() for t in context.trades}
@@ -244,13 +437,21 @@ def _compose_summary(
         Decimal(str(t.get("size", 0))) * Decimal(str(t.get("price", 0)))
         for t in context.trades
     )
-    n_signals_fired = len({h.signal_id for h in hits})
+    signal_names = sorted({
+        next((s.name for s in REGISTRY if s.id == h.signal_id), h.signal_id)
+        for h in hits
+    })
+    cross_market_wallets = sum(1 for w in watches if w.market_count >= 2)
     return [
         ("Trades observed", f"{n_trades:,}"),
         ("Unique wallets", f"{len(wallets):,}"),
         ("Total notional", _money_short(total_notional)),
-        ("Signals firing", str(n_signals_fired)),
+        (
+            "Signals firing",
+            ", ".join(signal_names) if signal_names else "none",
+        ),
         ("Cross-signal markets", str(len(promoted))),
+        ("Cross-market wallets (≥ 2)", str(cross_market_wallets)),
     ]
 
 
