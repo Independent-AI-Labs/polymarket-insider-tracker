@@ -25,6 +25,7 @@ from .base import (
     SignalHit,
     _money,
     _short_wallet,
+    _wallet_cell_html,
 )
 from .gates import DEFAULT_GATES, GateConfig, passes_all
 
@@ -69,8 +70,7 @@ class UnusualSizeSignal(Signal):
 
     def columns(self) -> list[ColumnSpec]:
         return [
-            ColumnSpec("wallet_display", "Wallet", "left", "wallet",
-                       link_field="wallet_url"),
+            ColumnSpec("wallet_cell_html", "Wallet", "left", "html"),
             ColumnSpec("market_title", "Market", "left", "text",
                        link_field="market_url", width_hint="38%"),
             ColumnSpec("side", "Side", "left", "text"),
@@ -203,6 +203,7 @@ def _make_hit(
             "wallet_address": wallet,
             "wallet_display": _short_wallet(wallet),
             "wallet_url": f"https://polymarket.com/profile/{wallet}",
+            "wallet_cell_html": _wallet_cell_html(wallet),
             "market_id": mid,
             "market_title": str(trade.get("title", "")),
             "market_url": f"https://polymarket.com/event/{trade.get('eventSlug', '')}",

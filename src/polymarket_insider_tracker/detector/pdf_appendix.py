@@ -30,6 +30,8 @@ from typing import Any
 from .signals import DailyReport, REGISTRY
 from .signals.base import (
     CATEGORY_PALETTE,
+    _short_wallet,
+    _wallet_cell_html,
     category_badges_html,
     category_palette,
     signal_badges_html,
@@ -243,9 +245,10 @@ def _watches_table(watches, *, include_markets: bool = True) -> str:
             markets_cell = "".join(rows)
         fresh_tag = ' <span class="fresh-flag">fresh</span>' if w.is_fresh else ""
         first_seen = w.first_seen_fmt or "—"
+        wallet_cell = _wallet_cell_html(w.address)
         parts.append(
             f'<tr>'
-            f'<td class="mono"><a href="{w.profile_url}">{w.address_display}</a>{fresh_tag}</td>'
+            f'<td>{wallet_cell}{fresh_tag}</td>'
             f'<td>{first_seen}</td>'
             f'<td class="num">${w.total_notional:,.0f}</td>'
             f'<td class="num">{w.market_count}</td>'
@@ -299,14 +302,15 @@ def _cross_signal_tier(report: DailyReport) -> str:
         )
         for h in p.hit_details:
             row = h["row"]
-            wallet = row.get("wallet_display", "")
-            wallet_url = row.get("wallet_url", "")
-            if wallet and wallet_url:
-                wallet_cell = f'<a href="{wallet_url}" class="mono">{wallet}</a>'
+            wallet_addr = row.get("wallet_address", "")
+            if wallet_addr:
+                wallet_cell = _wallet_cell_html(wallet_addr)
             else:
+                # Market-level signal — contributor list already
+                # embeds identicons via _wallet_list_html.
                 wallet_cell = row.get("top_wallets_fmt", "—") or "—"
             extra = _row_extra(row, h["signal_id"])
-            sig_badge = f'<span class="badge {h["category"]}">{h["signal_name"]}</span>'
+            sig_badge = _signal_badge_with_icon(h["signal_name"], h["category"])
             parts.append(
                 f'<tr>'
                 f'<td>{sig_badge}</td>'
@@ -319,6 +323,15 @@ def _cross_signal_tier(report: DailyReport) -> str:
         parts.append("</tbody></table>")
     parts.append("</div>")
     return "".join(parts)
+
+
+def _signal_badge_with_icon(signal_name: str, category: str) -> str:
+    """Small inline badge for signal names — same renderer as the
+    email so PDF and mail stay in lock-step. Delegates to the
+    shared `_badge_html` which emits the PNG-icon data-URI.
+    """
+    from .signals.base import _badge_html
+    return _badge_html(signal_name, category, size="sm")
 
 
 def _cover(report: DailyReport) -> str:
@@ -398,20 +411,19 @@ def _by_market_log(report: DailyReport) -> str:
                 entry["total_notional"] += float(abs(notional))
             except (TypeError, ValueError):
                 pass
-            # Pick wallet display — use explicit wallet_display on
-            # wallet-level rows, fall back to top_wallets_fmt on
-            # market-level rows.
-            wallet = row.get("wallet_display", "")
-            wallet_url = row.get("wallet_url", "")
-            if not wallet:
-                wallet = row.get("top_wallets_fmt", "") or "—"
-                wallet_url = ""
+            # Pick wallet cell — explicit address → blockie+link,
+            # otherwise fall back to the pre-rendered contributor
+            # list (which itself uses _wallet_list_html for blockies).
+            wallet_addr = row.get("wallet_address", "")
+            if wallet_addr:
+                wallet_cell = _wallet_cell_html(wallet_addr)
+            else:
+                wallet_cell = row.get("top_wallets_fmt", "") or "—"
             entry["rows"].append(
                 {
                     "signal": signal_name,
                     "signal_id": signal_id,
-                    "wallet": wallet,
-                    "wallet_url": wallet_url,
+                    "wallet_cell": wallet_cell,
                     "side": row.get("side", ""),
                     "notional_fmt": _row_notional(row),
                     "extra": _row_extra(row, signal_id),
@@ -458,17 +470,15 @@ def _by_market_log(report: DailyReport) -> str:
             '</tr></thead><tbody>'
         )
         for r in e["rows"]:
-            wallet_cell = (
-                f'<a href="{r["wallet_url"]}">{r["wallet"]}</a>'
-                if r["wallet"] and r["wallet_url"]
-                else (r["wallet"] or "—")
-            )
             cat = cats_for_market.get(r["signal"], "")
-            sig_badge = f'<span class="badge {cat}">{r["signal"]}</span>' if cat else r["signal"]
+            sig_badge = (
+                _signal_badge_with_icon(r["signal"], cat)
+                if cat else r["signal"]
+            )
             parts.append(
                 f'<tr>'
                 f'<td>{sig_badge}</td>'
-                f'<td class="mono">{wallet_cell}</td>'
+                f'<td>{r["wallet_cell"]}</td>'
                 f'<td>{r["side"] or "—"}</td>'
                 f'<td class="num">{r["notional_fmt"]}</td>'
                 f'<td>{r["extra"]}</td>'

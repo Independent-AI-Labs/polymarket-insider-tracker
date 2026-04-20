@@ -30,6 +30,7 @@ from .base import (
     SignalHit,
     _money,
     _short_wallet,
+    _wallet_cell_html,
 )
 from .gates import DEFAULT_GATES, GateConfig, passes_all
 
@@ -70,8 +71,7 @@ class FreshWalletSignal(Signal):
 
     def columns(self) -> list[ColumnSpec]:
         return [
-            ColumnSpec("wallet_display", "Wallet", "left", "wallet",
-                       link_field="wallet_url"),
+            ColumnSpec("wallet_cell_html", "Wallet", "left", "html"),
             ColumnSpec("market_title", "Market", "left", "text",
                        link_field="market_url", width_hint="34%"),
             ColumnSpec("side", "Side", "left", "text"),
@@ -182,6 +182,7 @@ class FreshWalletSignal(Signal):
                         "wallet_address": wallet,
                         "wallet_display": _short_wallet(wallet),
                         "wallet_url": f"https://polymarket.com/profile/{wallet}",
+                        "wallet_cell_html": _wallet_cell_html(wallet),
                         "market_id": mid,
                         "market_title": e["title"],
                         "market_url": f"https://polymarket.com/event/{e['event_slug']}",
