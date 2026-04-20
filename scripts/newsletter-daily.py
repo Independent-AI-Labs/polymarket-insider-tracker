@@ -273,6 +273,7 @@ def report_to_tera_payload(report, cfg: dict[str, Any]) -> dict[str, Any]:
         f"{report.window_end:%Y-%m-%d %H:%M} UTC "
         f"({(report.window_end - report.window_start).total_seconds() / 3600:.1f} h)"
     )
+    promoted = getattr(report, "promoted_markets", None) or []
     return {
         "date": report.date,
         "window_fmt": window_fmt,
@@ -284,6 +285,18 @@ def report_to_tera_payload(report, cfg: dict[str, Any]) -> dict[str, Any]:
         "glossary": [list(g) for g in report.glossary],
         "footer_legal_name": report.footer_legal_name,
         "footer_postal_address": report.footer_postal_address,
+        "promoted_markets": [
+            {
+                "market_title": p.market_title,
+                "market_url": p.market_url,
+                "categories": p.categories,
+                "signal_names": p.signal_names,
+                "total_notional": p.total_notional,
+                "total_notional_fmt": f"${p.total_notional:,.0f}",
+                "category_count": len(p.categories),
+            }
+            for p in promoted
+        ],
     }
 
 

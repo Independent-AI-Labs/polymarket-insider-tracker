@@ -31,17 +31,11 @@ from .base import (
     _money,
     _short_wallet,
 )
+from .gates import DEFAULT_GATES, GateConfig, passes_all
 
 LOG = logging.getLogger(__name__)
 
 DATA_API = "https://data-api.polymarket.com"
-FRESH_WALLET_MAX_DAYS = 30.0
-# How many of the wallet's recent trades to fetch to decide
-# "first-seen". 1000 is the per-request cap; that's enough for
-# any wallet that has traded fewer than 1000 times on Polymarket
-# (the overwhelming majority). For prolific wallets older than
-# 30d, the window is irrelevant anyway — the trade that IS older
-# than 30d will appear.
 HISTORY_LIMIT = 1000
 # Don't re-probe the same wallet in the same run.
 _wallet_cache: dict[str, datetime | None] = {}
@@ -51,14 +45,28 @@ class FreshWalletSignal(Signal):
     id = "01-A-fresh-wallet"
     name = "Fresh wallets"
     category = "informed_flow"
-    description = (
-        f"Wallets whose earliest observable Polymarket trade is "
-        f"within {FRESH_WALLET_MAX_DAYS:.0f} days of today — the "
-        "behavioural fingerprint of a just-funded account that then "
-        "opens a size-meaningful position."
-    )
     reliability_band = "medium"
     hide_when_empty = True
+
+    def __init__(
+        self,
+        *,
+        max_days: float = 30.0,
+        min_trade_notional: float = 10_000.0,
+        top_n: int = 5,
+        gate_config: GateConfig | None = None,
+    ) -> None:
+        self.max_days = max_days
+        self.min_trade_notional = min_trade_notional
+        self.top_n = top_n
+        self.gates = gate_config or DEFAULT_GATES
+        self.description = (
+            f"Wallets whose earliest observable Polymarket trade is "
+            f"within {self.max_days:.0f} days of today AND whose "
+            f"flagged trade is ≥ {_money(self.min_trade_notional)} — "
+            "the behavioural fingerprint of a just-funded account "
+            "opening a size-meaningful position."
+        )
 
     def columns(self) -> list[ColumnSpec]:
         return [
@@ -75,8 +83,9 @@ class FreshWalletSignal(Signal):
         if not context.trades:
             return []
 
-        # Largest trade per wallet in the window. Signals that test
-        # "wallet did a big trade" should rank by the biggest one.
+        # Largest trade per wallet in the window — but gated on
+        # (a) per-trade notional ≥ min_trade_notional
+        # (b) market passes the price / lifespan / novelty gates.
         by_wallet: dict[str, dict[str, Any]] = {}
         for t in context.trades:
             wallet = str(t.get("proxyWallet", "")).lower()
@@ -85,9 +94,29 @@ class FreshWalletSignal(Signal):
             notional = Decimal(str(t.get("size", 0))) * Decimal(
                 str(t.get("price", 0))
             )
+            if float(notional) < self.min_trade_notional:
+                continue
+            mid = str(t.get("conditionId", "")).lower()
+            meta = context.market_meta.get(mid) or {}
+            # Fresh-wallet signal doesn't require the thin-book gate
+            # (it's wallet-level, not a price-impact claim) — but it
+            # DOES require price-band, lifespan and novelty gates.
+            if not passes_all(
+                meta,
+                self.gates,
+                require_price=True,
+                require_time=True,
+                require_lifespan=True,
+                require_novelty_skip=True,
+                require_liquidity=False,
+            ):
+                continue
             existing = by_wallet.get(wallet)
             if existing is None or notional > existing["_notional"]:
                 by_wallet[wallet] = {**t, "_notional": notional}
+
+        if not by_wallet:
+            return []
 
         # Probe Polymarket first-trade for each candidate.
         candidates = list(by_wallet.keys())
@@ -96,15 +125,15 @@ class FreshWalletSignal(Signal):
         )
 
         now = context.window_end or datetime.now(UTC)
-        cutoff = now - timedelta(days=FRESH_WALLET_MAX_DAYS)
+        cutoff = now - timedelta(days=self.max_days)
 
         hits: list[SignalHit] = []
         for wallet, trade in by_wallet.items():
             first_trade_ts = first_trades.get(wallet)
             if first_trade_ts is None:
-                continue  # probe failed — don't flag
+                continue
             if first_trade_ts < cutoff:
-                continue  # wallet is older than the freshness cutoff
+                continue
             days = (now - first_trade_ts).total_seconds() / 86400
             notional = float(trade["_notional"])
             hits.append(
@@ -114,15 +143,12 @@ class FreshWalletSignal(Signal):
                     market_id=str(trade.get("conditionId", "")),
                     market_title=str(trade.get("title", "")),
                     event_slug=str(trade.get("eventSlug", "")),
-                    # Score = freshness + size_rank. Freshness ∈ [0, 1]
-                    # linear in (days_fresh). Size is already the
-                    # biggest trade for this wallet — we rank across
-                    # wallets by notional descending.
-                    score=min(1.0, 0.5 + 0.5 * (1 - days / FRESH_WALLET_MAX_DAYS)),
+                    score=min(1.0, 0.5 + 0.5 * (1 - days / self.max_days)),
                     row={
                         "wallet_address": wallet,
                         "wallet_display": _short_wallet(wallet),
                         "wallet_url": f"https://polymarket.com/profile/{wallet}",
+                        "market_id": str(trade.get("conditionId", "")),
                         "market_title": str(trade.get("title", "")),
                         "market_url": f"https://polymarket.com/event/{trade.get('eventSlug', '')}",
                         "side": str(trade.get("side", "")),
@@ -135,9 +161,8 @@ class FreshWalletSignal(Signal):
                 )
             )
 
-        # Rank by score descending, then notional, keep top 5.
         hits.sort(key=lambda h: (h.score, h.row["notional"]), reverse=True)
-        hits = hits[:5]
+        hits = hits[:self.top_n]
 
         # The top hit carries the section's headline fragment.
         if hits:
