@@ -25,6 +25,7 @@ from .base import (
     _money,
     _pct,
     _short_wallet,
+    _wallet_list_html,
 )
 from .gates import DEFAULT_GATES, GateConfig, passes_all
 
@@ -71,7 +72,7 @@ class OrderFlowImbalanceSignal(Signal):
             ColumnSpec("imbalance_fmt", "Imbalance", "right", "percent"),
             ColumnSpec("trade_count", "Trades", "right", "int"),
             ColumnSpec("net_notional_fmt", "Net notional", "right", "money"),
-            ColumnSpec("top_wallets_fmt", "Top contributors", "left", "text"),
+            ColumnSpec("top_wallets_fmt", "Top contributors", "left", "html"),
         ]
 
     def compute(self, context: SignalContext) -> list[SignalHit]:
@@ -145,10 +146,10 @@ class OrderFlowImbalanceSignal(Signal):
             ]
             contribs.sort(key=lambda p: abs(p[1]), reverse=True)
             top_contribs = contribs[: self.top_contributors]
-            top_wallets_fmt = ", ".join(
-                f"{_short_wallet(w)} ({_money(abs(a))})"
-                for w, a in top_contribs
-            ) or "—"
+            # HTML so both email + PDF render clickable wallet links.
+            top_wallets_fmt = _wallet_list_html(
+                [(w, float(abs(a))) for w, a in top_contribs]
+            )
 
             hits.append(
                 SignalHit(

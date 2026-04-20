@@ -238,3 +238,26 @@ def _bps_signed(value: float | int) -> str:
 
 def _pct(value: float | int) -> str:
     return f"{value * 100:.0f}%"
+
+
+def _wallet_list_html(contribs: list[tuple[str, float]]) -> str:
+    """Render a list of (address, amount) pairs as HTML with
+    clickable links to each wallet's Polymarket profile.
+
+    Used by market-level signals (OFI, clusters, velocity) in the
+    'Top contributors' column so every wallet mention in the email
+    AND PDF is a single-click drill-down.
+    """
+    if not contribs:
+        return "—"
+    parts = []
+    for addr, amount in contribs:
+        short = _short_wallet(addr)
+        money_fmt = _money(amount)
+        parts.append(
+            f'<a href="https://polymarket.com/profile/{addr}" '
+            f'style="color:#1a5fb4;text-decoration:none;'
+            f'font-family:monospace;font-size:12px">{short}</a> '
+            f'<span style="color:#666">({money_fmt})</span>'
+        )
+    return ", ".join(parts)
