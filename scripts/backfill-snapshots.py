@@ -46,6 +46,7 @@ import logging
 import sys
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, date, datetime, timedelta
 from datetime import time as dtime
 from pathlib import Path
@@ -84,6 +85,18 @@ REPLAY_SKIP_SIGNALS: set[str] = {
 }
 
 DEFAULT_CACHE_ROOT = Path.home() / ".cache" / "polymarket-insider-tracker" / "backfill"
+
+# Per-market fetch fan-out. data-api has no documented rate limit and
+# the endpoint is Cloudflare-cached, so 16 concurrent worker threads
+# landed fine in dev probes. Tune via --fetch-workers if the origin
+# starts pushing back.
+DEFAULT_FETCH_WORKERS = 16
+
+# Markets with volumeNum == 0 provably have no trades (Polymarket's
+# own metric), so we skip the per-market fetch for them. The `--min-volume`
+# flag tightens this further — e.g. `--min-volume 100` drops markets
+# whose all-time volume is below $100.
+DEFAULT_MIN_VOLUME = 1.0
 
 
 # ── Market enumeration ──────────────────────────────────────────────
@@ -374,6 +387,18 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Ignore per-market trade caches and re-fetch from data-api.",
     )
+    parser.add_argument(
+        "--fetch-workers",
+        type=int,
+        default=DEFAULT_FETCH_WORKERS,
+        help="Concurrent workers fetching per-market trade pages.",
+    )
+    parser.add_argument(
+        "--min-volume",
+        type=float,
+        default=DEFAULT_MIN_VOLUME,
+        help="Skip markets whose all-time volumeNum is below this threshold.",
+    )
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args(argv)
 
@@ -414,6 +439,16 @@ def main(argv: list[str] | None = None) -> int:
         markets = [m for m in markets if m["condition_id"].lower() in wanted]
         LOG.info("markets-filter: %d markets after filter", len(markets))
 
+    # Drop zero-volume and sub-threshold markets upfront — they
+    # demonstrably have no trades in any window.
+    if args.min_volume > 0:
+        pre = len(markets)
+        markets = [m for m in markets if m.get("volumeNum", 0) >= args.min_volume]
+        LOG.info(
+            "min-volume: kept %d/%d markets with volumeNum >= %s",
+            len(markets), pre, args.min_volume,
+        )
+
     if args.limit_markets is not None:
         markets = markets[: args.limit_markets]
         LOG.info("limit-markets: processing top %d by volume", len(markets))
@@ -427,44 +462,60 @@ def main(argv: list[str] | None = None) -> int:
         microseconds=1
     )
 
+    # Populate market_meta skeletons upfront so every worker can
+    # write `lastTradePrice` without racing on the dict shape.
+    for m in markets:
+        cid = m["condition_id"]
+        market_meta.setdefault(
+            cid,
+            {
+                "conditionId": cid,
+                "question": m.get("question", ""),
+                "slug": m.get("slug", ""),
+                "startDate": m.get("startDate", ""),
+                "endDate": m.get("endDate", ""),
+                "closed": m.get("closed", False),
+                "volumeNum": m.get("volumeNum", 0),
+                # volume24hr is a live field — unknown in replay.
+                # Signals that read it are skipped by default.
+                "volume24hr": 0,
+                "liquidityClob": 0,
+                "category": "",
+            },
+        )
+
     t0 = time.time()
     trades_by_day: dict[date, list[dict[str, Any]]] = defaultdict(list)
     truncated_markets = 0
     total_trades = 0
     markets_with_trades = 0
 
-    with httpx.Client(timeout=60.0) as http_client:
-        for i, m in enumerate(markets):
-            cid = m["condition_id"]
-            market_meta.setdefault(
-                cid,
-                {
-                    "conditionId": cid,
-                    "question": m.get("question", ""),
-                    "slug": m.get("slug", ""),
-                    "startDate": m.get("startDate", ""),
-                    "endDate": m.get("endDate", ""),
-                    "closed": m.get("closed", False),
-                    "volumeNum": m.get("volumeNum", 0),
-                    # volume24hr is a live field — unknown in replay.
-                    # Signals that read it are skipped by default.
-                    "volume24hr": 0,
-                    "liquidityClob": 0,
-                    "category": "",
-                },
-            )
+    def _fetch_one(m: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
+        cid = m["condition_id"]
+        # Each worker owns its own httpx.Client — threading.Client
+        # isn't safe to share across threads for httpx < 0.27.
+        with httpx.Client(timeout=60.0) as client:
             try:
                 rows, truncated = fetch_market_trades(
                     market_id=cid,
                     start=trade_window_start,
                     end=trade_window_end,
                     cache_dir=trade_cache_dir,
-                    client=http_client,
+                    client=client,
                     force_refresh=args.force_refresh_trades,
                 )
             except Exception:
                 LOG.exception("market=%s fetch failed; skipping", cid)
-                continue
+                return m, [], False
+        return m, rows, truncated
+
+    done_count = 0
+    with ThreadPoolExecutor(max_workers=args.fetch_workers) as pool:
+        futures = [pool.submit(_fetch_one, m) for m in markets]
+        for fut in as_completed(futures):
+            m, rows, truncated = fut.result()
+            cid = m["condition_id"]
+            done_count += 1
             if truncated:
                 truncated_markets += 1
                 LOG.warning(
@@ -489,20 +540,17 @@ def main(argv: list[str] | None = None) -> int:
                             latest_price = float(row.get("price", 0) or 0)
                         except (TypeError, ValueError):
                             latest_price = None
-                # Synthesise gamma-style fields from the trade stream so
-                # the price-band gate has something to read. This is the
-                # "last price seen in the window" — an approximation of
-                # `lastTradePrice` that's replay-safe. The alternative
-                # (leaving the field absent) failed every market on the
-                # price gate and produced zero signal hits in smoke.
+                # Synthesise a `lastTradePrice` from the trade stream
+                # so the price-band gate has something to read. See
+                # BACKFILL-CAVEATS.md for the bias analysis.
                 if latest_price is not None:
                     market_meta[cid]["lastTradePrice"] = latest_price
-            if (i + 1) % 50 == 0:
+            if done_count % 250 == 0:
                 elapsed = time.time() - t0
                 LOG.info(
-                    "market enum progress: %d/%d markets, %d trades so far "
+                    "fetch progress: %d/%d markets, %d trades so far "
                     "(%.1f min elapsed)",
-                    i + 1, len(markets), total_trades, elapsed / 60,
+                    done_count, len(markets), total_trades, elapsed / 60,
                 )
 
     fetch_elapsed = time.time() - t0
