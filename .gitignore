@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Backfill run artefacts — logs + stdout from long-running jobs.
+.backfill-runs/
+
 # C extensions
 *.so
 

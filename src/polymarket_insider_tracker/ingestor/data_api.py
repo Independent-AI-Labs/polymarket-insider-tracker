@@ -28,8 +28,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -47,6 +48,13 @@ DEFAULT_LIMIT = 1000
 # Size of the dedupe window. 10k trades × 5-8 s gap per batch is
 # ~15-20 min of coverage, well beyond any reasonable poll interval.
 DEFAULT_DEDUPE_WINDOW = 10_000
+
+# Per-market pagination hard cap — documented as the global offset
+# ceiling, empirically also applies to `?market=<cid>` scoped queries.
+# A market with > 3000 trades in the backfill window will be truncated
+# at its earliest-reachable page; the backloader logs this.
+HISTORICAL_MAX_OFFSET = 3000
+HISTORICAL_PAGE_SIZE = 500
 
 
 TradeCallback = Callable[[TradeEvent], Awaitable[None]]
@@ -235,3 +243,157 @@ class DataAPITradePoller:
 
     async def __aexit__(self, *_: Any) -> None:
         await self.stop()
+
+
+# ── Historical backloader helper ────────────────────────────────────
+
+
+class HistoricalTruncation(Exception):
+    """Raised (used as a sentinel) when the 3000-row offset wall is
+    hit before reaching the requested `start` cutoff.
+
+    The caller is expected to surface this as a per-market metric —
+    the backloader does NOT abort; it keeps whatever rows were
+    retrieved and moves on to the next market.
+    """
+
+
+def iter_trades_historical(
+    market_id: str,
+    *,
+    start: datetime,
+    end: datetime | None = None,
+    base_url: str = DEFAULT_BASE_URL,
+    page_size: int = HISTORICAL_PAGE_SIZE,
+    max_offset: int = HISTORICAL_MAX_OFFSET,
+    client: httpx.Client | None = None,
+    inter_page_sleep: float = 0.0,
+) -> Iterator[dict[str, Any]]:
+    """Yield raw `/trades` rows for a single market in [start, end).
+
+    Pages `?market=<cid>` newest-first with `offset` increments of
+    `page_size` until either the oldest row in a page is < `start`
+    or the 3000-offset cap is hit. Yields raw JSON rows (the same
+    dict shape `DataAPITradePoller` ingests) — the replay loop
+    persists these verbatim to disk so re-runs don't re-hit the API.
+
+    Rate-limit backoff mirrors the poll loop: a single 429 / 5xx
+    retry-after-one-second pass. The data-api has no documented
+    rate limit and the endpoint is Cloudflare-cached, so bursts of
+    parallel requests land fine in practice (see SPEC-DATA-SOURCES
+    § 2.2).
+
+    Raises `HistoricalTruncation` as a sentinel when the 3000-offset
+    wall truncates the market's history before `start` is reached —
+    callers that care about truncation visibility should treat this
+    as a WARNING, not a fatal error. The exception is raised AFTER
+    every reachable row has been yielded so `list(iter_...)` still
+    returns partial history on truncation if wrapped with `try:`.
+    """
+    if end is None:
+        end = datetime.now(UTC)
+    start_ts = int(start.timestamp())
+    end_ts = int(end.timestamp())
+
+    owns_client = client is None
+    if client is None:
+        client = httpx.Client(timeout=30.0)
+
+    truncated = False
+    try:
+        offset = 0
+        reached_start = False
+        while offset <= max_offset:
+            url = f"{base_url.rstrip('/')}/trades"
+            params = {
+                "market": market_id,
+                "limit": page_size,
+                "offset": offset,
+            }
+            try:
+                resp = client.get(url, params=params)
+            except httpx.HTTPError as exc:
+                logger.warning(
+                    "historical fetch market=%s offset=%d failed: %s",
+                    market_id, offset, exc,
+                )
+                break
+            if resp.status_code == 429 or resp.status_code >= 500:
+                # One-shot backoff — the endpoint is cached, so a
+                # single-second pause usually suffices.
+                time.sleep(1.0)
+                try:
+                    resp = client.get(url, params=params)
+                except httpx.HTTPError as exc:
+                    logger.warning(
+                        "historical retry market=%s offset=%d failed: %s",
+                        market_id, offset, exc,
+                    )
+                    break
+            if resp.status_code != 200:
+                # The 3000-offset ceiling returns HTTP 400 with a
+                # known error body. Any other non-200 is logged and
+                # treated as end-of-stream.
+                try:
+                    body = resp.json()
+                except ValueError:
+                    body = None
+                if isinstance(body, dict) and "exceeded" in str(body.get("error", "")).lower():
+                    truncated = True
+                    break
+                logger.warning(
+                    "historical fetch market=%s offset=%d http=%d body=%r",
+                    market_id, offset, resp.status_code, body,
+                )
+                break
+            try:
+                rows = resp.json()
+            except ValueError:
+                logger.warning(
+                    "historical fetch market=%s offset=%d returned non-JSON",
+                    market_id, offset,
+                )
+                break
+            if not isinstance(rows, list) or not rows:
+                break
+
+            oldest_ts: int | None = None
+            for row in rows:
+                ts = int(row.get("timestamp", 0) or 0)
+                if oldest_ts is None or ts < oldest_ts:
+                    oldest_ts = ts
+                if ts < start_ts:
+                    # Past the lower bound — still yield nothing for
+                    # this row and any subsequent older rows in this
+                    # page are skipped outside the yield block.
+                    continue
+                if ts >= end_ts:
+                    # Newer than the window's upper bound — skip.
+                    continue
+                yield row
+
+            # Loop termination — page's oldest row is older than the
+            # window's lower bound, no need to paginate deeper.
+            if oldest_ts is not None and oldest_ts < start_ts:
+                reached_start = True
+                break
+            # Partial page ⇒ end of history.
+            if len(rows) < page_size:
+                reached_start = True
+                break
+            offset += page_size
+            if inter_page_sleep > 0:
+                time.sleep(inter_page_sleep)
+        # Fell out of the while-condition (offset > max_offset) AND
+        # we never paged past `start_ts` — the 3000-offset wall
+        # truncated the market's reachable history.
+        if not reached_start and offset > max_offset:
+            truncated = True
+    finally:
+        if owns_client:
+            client.close()
+
+    if truncated:
+        raise HistoricalTruncation(
+            f"market={market_id} hit 3000-offset wall before reaching {start.isoformat()}"
+        )
